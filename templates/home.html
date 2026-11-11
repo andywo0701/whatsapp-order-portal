@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}歡迎回來｜落單上載{% endblock %}
+{% block content %}
+{% if notice == "submitted" %}
+<p class="alert ok">已收到你的上載，處理好的 Excel 會放回這裡。</p>
+{% endif %}
+{% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+
+<section class="card">
+  <p class="eyebrow">{{ role_label }} · {{ role_title }}</p>
+  <h1>歡迎回來</h1>
+  <p class="muted">{{ user }}，把對話導出、圈好的圖片或聯絡人截圖交給我們就好。單檔上限 40MB，一次最多 80MB。</p>
+  <form method="post" action="/submit" enctype="multipart/form-data" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>類型
+      <select name="kind" required>
+        {% for k in kinds %}
+        <option value="{{ k }}" {% if k == "新單" %}selected{% endif %}>{{ k }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>備註（可選）
+      <textarea name="note" rows="3" maxlength="2000" placeholder="例如要補充的事項，請不要在這裡貼上不必要的個人資料"></textarea>
+    </label>
+    <label>檔案
+      <input type="file" name="files" multiple required accept=".jpg,.jpeg,.png,.webp,.gif,.heic,.heif,.pdf,.txt,.zip,.xlsx,.xls,.csv,.doc,.docx,image/*">
+    </label>
+    <button type="submit" class="btn primary">提交上載</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>近期提交</h2>
+  {% if items %}
+  <ul class="feed">
+    {% for item in items %}
+    <li>
+      <a class="feed-link" href="/submission/{{ item.id }}">
+        <span class="feed-top">
+          <span class="feed-title">{{ item.kind }}</span>
+          <span class="tag tag-{{ item.status }}">{{ item.status_label }}</span>
+        </span>
+        <span class="feed-meta">{{ item.submitted_display }} · {{ item.files|length }} 個檔案{% if item.result_files %} · 結果 {{ item.result_files|length }} 個{% endif %}</span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted quiet">還沒有提交。需要時再上載就可以了。</p>
+  {% endif %}
+</section>
+{% endblock %}
