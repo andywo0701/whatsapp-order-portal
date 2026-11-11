@@ -21,6 +21,7 @@
         <span class="role">{{ role_label }} <span class="role-en">{{ role_title }}</span></span>
       </div>
       <nav class="top-actions" aria-label="帳戶">
+        <a class="btn ghost" href="/customers">顧客名冊</a>
         <a class="btn ghost" href="/account">帳戶</a>
         <form method="post" action="/logout">
           <input type="hidden" name="csrf" value="{{ csrf }}">

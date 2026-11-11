@@ -109,5 +109,34 @@ def publish_result(sub_id: str, files: list[Path], status: str, admin_note: str 
     )
 
 
+def publish_roster(roster_json: Path) -> None:
+    """Upload customers/roster.json. The portal merges it; it does not OCR.
+
+    name and phone must be strings when present, so a phone keeps the characters
+    the scanner actually saw. The portal will not replace a known phone with a
+    blank, and it will not choose between two different phones for one name.
+    """
+    path = Path(roster_json)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not isinstance(data.get("customers"), list):
+        raise ValueError("roster json must be an object with a customers list")
+    for row in data["customers"]:
+        if not isinstance(row, dict):
+            raise ValueError("each customer must be an object")
+        for key in ("name", "phone"):
+            if key in row and row[key] is not None and not isinstance(row[key], str):
+                raise ValueError(f"{key} must be a string")
+    tok = token()
+    upload_file(
+        path_or_fileobj=path.read_bytes(),
+        path_in_repo="customers/roster.json",
+        repo_id=DATASET_ID,
+        repo_type="dataset",
+        token=tok,
+        commit_message="Publish customer roster",
+    )
+    print("Published customers/roster.json")
+
+
 if __name__ == "__main__":
     main()

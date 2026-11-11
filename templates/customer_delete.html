@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}刪除顧客｜顧客名冊{% endblock %}
+{% block content %}
+<p class="crumb"><a href="/customers/{{ customer.id }}">返回這位顧客</a></p>
+{% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+<section class="card">
+  <p class="eyebrow">超級管理員 · Super Admin</p>
+  <h1>{{ roster_delete_confirm }}</h1>
+  <p class="muted">確認之後，這位顧客會從名冊移除。之後的掃描如果再用同一個編號發布，也不會把這筆加回來。</p>
+  <dl class="meta">
+    <dt>顧客姓名</dt><dd>{{ customer.name_display }}</dd>
+    <dt>電話</dt><dd>{% if customer.phone_missing %}<span class="phone-missing">尚缺</span>{% else %}{{ customer.phone_display }}{% endif %}</dd>
+    <dt>狀態</dt><dd><span class="tag tag-{{ customer.status }}">{{ customer.status_label }}</span></dd>
+  </dl>
+  <div class="confirm-actions">
+    <form method="post" action="/customers/{{ customer.id }}/delete">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit" class="btn danger" name="confirm" value="{{ roster_delete_confirm }}">確定刪除</button>
+    </form>
+    <a class="btn ghost" href="/customers/{{ customer.id }}">取消</a>
+  </div>
+</section>
+{% endblock %}

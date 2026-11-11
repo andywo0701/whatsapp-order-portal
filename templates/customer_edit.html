@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}更正顧客｜顧客名冊{% endblock %}
+{% block content %}
+<p class="crumb"><a href="/customers/{{ customer.id }}">返回這位顧客</a></p>
+{% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+<section class="card">
+  <p class="eyebrow">超級管理員 · Super Admin</p>
+  <h1>更正這位顧客</h1>
+  <p class="muted">請照原來的電話寫法修改。已有電話不可改成空白。儲存後，號碼來源會標成「人手輸入」，表示這是超級管理員在本網站更正的，不是從圖片讀取的。</p>
+  {% if customer.conflict %}
+  <p class="deleted-note">目前有多於一個電話，系統沒有自動挑選：{{ customer.phone_display }}。請在下面寫下要保留的那一個。</p>
+  {% endif %}
+  <form method="post" action="/customers/{{ customer.id }}/edit" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>顧客姓名
+      <input type="text" name="name" value="{{ edit_name }}" maxlength="80" autocomplete="off">
+    </label>
+    <label>電話
+      <input type="text" name="phone" value="{{ edit_phone }}" maxlength="40" autocomplete="off" inputmode="tel" placeholder="已有電話不可留空">
+    </label>
+    <label>更正說明
+      <textarea name="note" rows="3" maxlength="500" required placeholder="請寫下為什麼要改">{{ edit_note }}</textarea>
+    </label>
+    <div class="confirm-actions">
+      <button type="submit" class="btn primary" name="confirm" value="{{ roster_edit_confirm }}">{{ roster_edit_confirm }}</button>
+      <a class="btn ghost" href="/customers/{{ customer.id }}">取消</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}顧客名冊｜落單上載{% endblock %}
+{% block content %}
+<p class="crumb"><a href="/">返回上載</a></p>
+{% if notice %}<p class="alert ok">{{ notice }}</p>{% endif %}
+{% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+
+<section class="card">
+  <p class="eyebrow">顧客名冊</p>
+  <h1>顧客姓名與電話</h1>
+  <p class="muted">這裡只顯示已經發布的名冊。電話會保持原來的寫法；還沒有電話就顯示尚缺。這個網站不會從圖片猜測姓名或電話。</p>
+  <form method="get" action="/customers" class="stack roster-search">
+    <label>搜尋姓名或電話
+      <input type="search" name="q" value="{{ query }}" placeholder="輸入姓名，或電話的一部分" autocomplete="off">
+    </label>
+    <input type="hidden" name="filter" value="{{ roster_filter }}">
+    <button type="submit" class="btn primary">搜尋</button>
+  </form>
+  <div class="date-modes roster-filters" aria-label="篩選">
+    <a class="chip{% if roster_filter == 'all' %} is-on{% endif %}" href="/customers?filter=all&amp;q={{ query|urlencode }}">全部</a>
+    <a class="chip{% if roster_filter == 'missing_phone' %} is-on{% endif %}" href="/customers?filter=missing_phone&amp;q={{ query|urlencode }}">尚缺電話</a>
+    <a class="chip{% if roster_filter == 'pending' %} is-on{% endif %}" href="/customers?filter=pending&amp;q={{ query|urlencode }}">待確認</a>
+  </div>
+  <p class="roster-tools">
+    <a class="btn ghost" href="/customers/roster.xlsx">下載顧客名冊.xlsx</a>
+    <span class="muted quiet">{% if rows|length != total %}顯示 {{ rows|length }} 位 / {% endif %}共 {{ total }} 位</span>
+  </p>
+</section>
+
+<section class="card">
+  <h2>名冊</h2>
+  {% if total == 0 %}
+  <p class="muted quiet">還沒有顧客名冊。請在上載頁選擇「客戶資料」，上載 WhatsApp 聯絡人截圖或含電話的對話。掃描完成後，名冊會出現在這裡。這個網站不會從圖片讀取姓名或電話。</p>
+  <p class="back"><a class="btn ghost" href="/?purpose=customers#upload-purpose">去上載客戶資料</a></p>
+  {% elif rows %}
+  <ul class="feed">
+    {% for row in rows %}
+    <li>
+      <a class="feed-link" href="/customers/{{ row.id }}">
+        <span class="feed-top">
+          <span class="feed-title">{{ row.name_display }}</span>
+          <span class="tag tag-{{ row.status }}">{{ row.status_label }}</span>
+        </span>
+        <span class="feed-meta">電話 {% if row.phone_missing %}<span class="phone-missing">尚缺</span>{% else %}{{ row.phone_display }}{% endif %}</span>
+        <span class="feed-date{% if row.phone_source_label == '尚缺' %} is-empty{% endif %}">{{ row.phone_source_label }} · {{ row.updated_display }}</span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted quiet">沒有符合的顧客。</p>
+  {% endif %}
+</section>
+{% endblock %}
