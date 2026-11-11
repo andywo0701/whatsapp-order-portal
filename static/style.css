@@ -275,6 +275,47 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .tag-done { background: var(--ok-bg); color: var(--ok); }
 .tag-need_info { background: #fde7d8; color: var(--warn); }
 .tag-processing { background: var(--lavender); color: var(--lavender-deep); }
+.tag-deleted { background: #f8e6ea; color: #8d4d5b; }
+.feed-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+.feed-row:has(.feed-delete) {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.btn.quiet-danger {
+  width: auto;
+  min-height: 44px;
+  padding: 8px 16px;
+  background: #fff;
+  color: #9a5562;
+  border: 1px solid #f0c9d0;
+}
+.btn.quiet-danger:hover { background: #fff5f6; }
+.btn.danger {
+  background: #c56b7c;
+  color: #fffaf8;
+}
+.btn.danger:hover { background: #b45d6e; }
+.confirm-actions {
+  display: grid;
+  gap: 10px;
+}
+.confirm-actions .btn { width: 100%; }
+.delete-panel {
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--line);
+}
+.deleted-note {
+  margin: 8px 0 0;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: #fbf4f5;
+  color: var(--muted);
+}
 .crumb { margin: 0 0 12px; }
 .meta {
   display: grid;
@@ -308,4 +349,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .date-window:has(input[name="record_mode"][value="range"]:checked) .range-fields {
     grid-template-columns: 1fr 1fr;
   }
+  .confirm-actions { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 560px) {
+  .feed-row:has(.feed-delete) { grid-template-columns: minmax(0, 1fr); }
+  .feed-delete { justify-self: end; }
 }
