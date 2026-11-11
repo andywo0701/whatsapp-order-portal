@@ -1,12 +1,26 @@
 # WhatsApp 落單上載
 
-受保護的上載入口：已登入的指定人員可提交 WhatsApp 對話導出、圈選圖片與聯絡人截圖，並下載已完成的落單 Excel。
+受保護的上載入口。同事登入後可提交 WhatsApp 對話導出、圈選圖片與聯絡人截圖，並下載已完成的落單 Excel。
 
-登入帳號、Session 密鑰與儲存用 token 只放在托管平台的環境變數，不要寫進這個倉庫。
+固定同事帳號只有這四位：
 
-主要環境變數：
+- Andy：Super Admin（超級管理員），可以為其他管理員設定密碼
+- Debbie、Taya、Katherine：Admin（管理員）
 
-- `SITE_USERNAME` / `SITE_PASSWORD`（或 `SITE_USERS`）
+每個人都可以在登入後更改自己的密碼。密碼不會寫進這個倉庫，也不會顯示在頁面上。
+
+第一次登入時，如果私人 dataset 裡還沒有該帳號的雜湊，可以用托管平台的環境變數做一次性引導。登入成功後會立刻把 PBKDF2 雜湊寫入 `users/accounts.json`，之後只認這份雜湊，不再使用環境變數裡的明文。
+
+引導用環境變數（只在該帳號還沒有雜湊時使用）：
+
+- `SITE_USERS`：多行 `帳號:密碼`
+- `SITE_USERNAME` 與 `SITE_PASSWORD`
+- `SITE_PASSWORD_ANDY`、`SITE_PASSWORD_DEBBIE`、`SITE_PASSWORD_TAYA`、`SITE_PASSWORD_KATHERINE`
+
+其他環境變數：
+
 - `SESSION_SECRET`
 - `HTTPS_ONLY`（生產環境保持 `true`）
-- `HF_TOKEN` 與 `INBOX_DATASET`（用私人 Hugging Face dataset 保存上載檔，因為免費 Web Service 沒有持久磁碟）
+- `HF_TOKEN` 與 `INBOX_DATASET`（私人 Hugging Face dataset，保存上載檔與密碼雜湊。免費 Web Service 的磁碟不會保留檔案）
+
+健康檢查路徑是 `/healthz`。不要把 `.env`、密碼、token 或客人資料放進倉庫。

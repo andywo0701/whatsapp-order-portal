@@ -4,19 +4,29 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
-  <title>{% block title %}WhatsApp 落單上載{% endblock %}</title>
+  <meta name="theme-color" content="#f6ebe8">
+  <title>{% block title %}落單上載{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <header class="top">
-    <a class="brand" href="/">WhatsApp 落單上載</a>
+    <a class="brand" href="/">
+      <span class="mark" aria-hidden="true">單</span>
+      <span>落單上載</span>
+    </a>
     {% if user %}
     <div class="top-right">
-      <span class="who">{{ user }}</span>
-      <form method="post" action="/logout">
-        <input type="hidden" name="csrf" value="{{ csrf }}">
-        <button type="submit" class="btn ghost">登出</button>
-      </form>
+      <div class="who">
+        <span class="who-name">{{ user }}</span>
+        <span class="role">{{ role_label }} <span class="role-en">{{ role_title }}</span></span>
+      </div>
+      <nav class="top-actions" aria-label="帳戶">
+        <a class="btn ghost" href="/account">帳戶</a>
+        <form method="post" action="/logout">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button type="submit" class="btn ghost">登出</button>
+        </form>
+      </nav>
     </div>
     {% endif %}
   </header>

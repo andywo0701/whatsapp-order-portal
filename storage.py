@@ -11,11 +11,12 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from huggingface_hub import HfApi, hf_hub_download
-from huggingface_hub.errors import RepositoryNotFoundError
+from huggingface_hub.errors import EntryNotFoundError, RepositoryNotFoundError
 
 HK = ZoneInfo("Asia/Hong_Kong")
 SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 SAFE_NAME = re.compile(r"^[A-Za-z0-9._\u4e00-\u9fff\-()+ ]+$")
+ACCOUNTS_REPO_PATH = "users/accounts.json"
 
 
 class Storage:
@@ -26,6 +27,7 @@ class Storage:
         self.local_root.mkdir(parents=True, exist_ok=True)
         self._api: HfApi | None = None
         self._ensured = False
+        self._password_records: dict[str, dict[str, Any]] | None = None
 
     def is_ready(self) -> bool:
         return bool(self.repo_id and self.token)
@@ -267,3 +269,151 @@ class Storage:
             return dt.astimezone(HK).strftime("%Y-%m-%d %H:%M") + " HKT"
         except Exception:
             return value
+
+    def refresh_password_records(self) -> dict[str, dict[str, Any]]:
+        remote = self._download_password_records()
+        if remote is None:
+            records = self._read_local_password_records()
+        else:
+            records = remote
+            self._write_local_password_records(records)
+        self._password_records = records
+        return records
+
+    def get_password_record(self, username: str) -> dict[str, Any] | None:
+        if self._password_records is None:
+            self.refresh_password_records()
+        record = (self._password_records or {}).get(username)
+        return dict(record) if isinstance(record, dict) else None
+
+    def password_generation(self, username: str) -> int | None:
+        record = self.get_password_record(username)
+        if not record:
+            return None
+        try:
+            return int(record.get("generation"))
+        except (TypeError, ValueError):
+            return None
+
+    def save_password_record(self, username: str, record: dict[str, Any]) -> None:
+        """Persist a hash record. Refuses plaintext password fields."""
+        from auth import STAFF
+
+        if username not in STAFF:
+            raise ValueError("unknown user")
+        safe = self._clean_password_record(record)
+        if self._password_records is None:
+            self.refresh_password_records()
+        remote = self._download_password_records()
+        if remote is None:
+            if self.is_ready():
+                raise RuntimeError("password store unavailable")
+            base = dict(self._password_records or {})
+        else:
+            base = dict(remote)
+        base[username] = safe
+        raw = json.dumps({"version": 1, "users": base}, ensure_ascii=False, indent=2).encode("utf-8")
+        if self.is_ready():
+            self.ensure_repo()
+            self._api_client().upload_file(
+                path_or_fileobj=raw,
+                path_in_repo=ACCOUNTS_REPO_PATH,
+                repo_id=self.repo_id,
+                repo_type="dataset",
+                commit_message="Update staff password hashes",
+            )
+        self._write_local_password_bytes(raw)
+        self._password_records = base
+
+    def _accounts_file(self) -> Path:
+        return self.local_root / "accounts.json"
+
+    def _download_password_records(self) -> dict[str, dict[str, Any]] | None:
+        if not self.is_ready():
+            return None
+        try:
+            downloaded = hf_hub_download(
+                repo_id=self.repo_id,
+                repo_type="dataset",
+                filename=ACCOUNTS_REPO_PATH,
+                token=self.token,
+                force_download=True,
+            )
+            return self._parse_password_file(Path(downloaded).read_text(encoding="utf-8"))
+        except (EntryNotFoundError, RepositoryNotFoundError):
+            return {}
+        except Exception:
+            return None
+
+    def _read_local_password_records(self) -> dict[str, dict[str, Any]]:
+        path = self._accounts_file()
+        if not path.is_file():
+            return {}
+        try:
+            return self._parse_password_file(path.read_text(encoding="utf-8"))
+        except OSError:
+            return {}
+
+    def _write_local_password_records(self, records: dict[str, dict[str, Any]]) -> None:
+        raw = json.dumps({"version": 1, "users": records}, ensure_ascii=False, indent=2).encode("utf-8")
+        self._write_local_password_bytes(raw)
+
+    def _write_local_password_bytes(self, raw: bytes) -> None:
+        path = self._accounts_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_bytes(raw)
+        os.chmod(temporary, 0o600)
+        temporary.replace(path)
+        os.chmod(path, 0o600)
+
+    def _parse_password_file(self, text: str) -> dict[str, dict[str, Any]]:
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return {}
+        users = data.get("users") if isinstance(data, dict) else None
+        if not isinstance(users, dict):
+            return {}
+        cleaned: dict[str, dict[str, Any]] = {}
+        from auth import STAFF
+
+        for name, record in users.items():
+            if name not in STAFF or not isinstance(record, dict):
+                continue
+            try:
+                cleaned[name] = self._clean_password_record(record)
+            except ValueError:
+                continue
+        return cleaned
+
+    def _clean_password_record(self, record: dict[str, Any]) -> dict[str, Any]:
+        for key in record:
+            if str(key).lower() == "password":
+                raise ValueError("plaintext password refused")
+        if record.get("algo") != "pbkdf2_sha256":
+            raise ValueError("incomplete record")
+        salt = record.get("salt")
+        digest = record.get("hash")
+        if not isinstance(salt, str) or not isinstance(digest, str):
+            raise ValueError("incomplete record")
+        try:
+            iterations = int(record["iterations"])
+            dklen = int(record.get("dklen") or 32)
+            generation = int(record["generation"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("incomplete record") from exc
+        if iterations < 1 or iterations > 2_000_000 or dklen < 16 or dklen > 64 or generation < 1:
+            raise ValueError("invalid record")
+        safe: dict[str, Any] = {
+            "algo": "pbkdf2_sha256",
+            "iterations": iterations,
+            "dklen": dklen,
+            "salt": salt,
+            "hash": digest,
+            "generation": generation,
+        }
+        updated = record.get("updated_at")
+        if isinstance(updated, str) and updated and len(updated) <= 64:
+            safe["updated_at"] = updated
+        return safe
