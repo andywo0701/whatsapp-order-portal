@@ -24,3 +24,14 @@
 - `HF_TOKEN` 與 `INBOX_DATASET`（私人 Hugging Face dataset，保存上載檔與密碼雜湊。免費 Web Service 的磁碟不會保留檔案）
 
 健康檢查路徑是 `/healthz`。不要把 `.env`、密碼、token 或客人資料放進倉庫。
+
+## WhatsApp 紀錄日期
+
+上載時可以選擇這些紀錄屬於哪一天，或一段開始到結束的日期。日期是香港日曆日（`Asia/Hong_Kong`），可以留空。
+
+留空時，之後的掃描會處理檔案裡找到的所有日期，manifest 不會寫入日期。有選擇時，`manifest.json` 會多兩個欄位：
+
+- `record_date_start`：`YYYY-MM-DD`
+- `record_date_end`：`YYYY-MM-DD`
+
+只選一天時，兩個欄位都是同一天。結束日期不可早於開始日期。舊的提交沒有這兩個欄位，列表和詳情頁仍可開啟，並顯示「未指定日期」。

@@ -24,7 +24,7 @@ from auth import (
     change_own_password,
     reset_admin_password,
 )
-from storage import Storage
+from storage import Storage, parse_iso_date, record_date_text
 
 try:
     from dotenv import load_dotenv
@@ -133,6 +133,55 @@ def _ctx(request: Request, **extra: Any) -> dict[str, Any]:
     }
 
 
+def parse_record_dates(
+    mode: str | None,
+    day: str | None,
+    start: str | None,
+    end: str | None,
+) -> tuple[str | None, str | None]:
+    """Optional Hong Kong calendar window. Blank means process every date in the files.
+
+    A single day is returned as the same start and end. Raises ValueError with a
+    Traditional Chinese message when the chosen dates are not usable.
+    """
+    selected = (mode or "").strip()
+    # Explicit 「不指定」 wins, including dates still posted by hidden inputs.
+    if selected == "":
+        return None, None
+    if selected == "day":
+        try:
+            chosen = parse_iso_date(day)
+        except ValueError as exc:
+            raise ValueError("日期格式不正確，請選擇有效的日期。") from exc
+        if chosen is None:
+            return None, None
+        iso = chosen.isoformat()
+        return iso, iso
+    if selected == "range":
+        try:
+            start_day = parse_iso_date(start)
+            end_day = parse_iso_date(end)
+        except ValueError as exc:
+            raise ValueError("日期格式不正確，請選擇有效的日期。") from exc
+        if start_day is None and end_day is None:
+            return None, None
+        if start_day is not None and end_day is not None and end_day < start_day:
+            raise ValueError("結束日期不可早於開始日期。")
+        if start_day is None and end_day is not None:
+            iso = end_day.isoformat()
+            return iso, iso
+        if end_day is None and start_day is not None:
+            iso = start_day.isoformat()
+            return iso, iso
+        assert start_day is not None and end_day is not None
+        return start_day.isoformat(), end_day.isoformat()
+    raise ValueError("請選擇單日或日期範圍。")
+
+
+def _echo_date(value: str | None) -> str:
+    return record_date_text(value)
+
+
 def _login_view(request: Request, error: str | None, status_code: int = 200) -> Response:
     return templates.TemplateResponse(
         request,
@@ -196,17 +245,40 @@ async def logout(request: Request, csrf: str = Form("")) -> Response:
     return RedirectResponse("/login", status_code=303)
 
 
+def _home_response(
+    request: Request,
+    *,
+    error: str | None,
+    notice: str | None,
+    status_code: int = 200,
+    form_mode: str = "",
+    form_day: str = "",
+    form_start: str = "",
+    form_end: str = "",
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "home.html",
+        _ctx(
+            request,
+            items=storage.list_submissions(),
+            error=error,
+            notice=notice,
+            form_mode=form_mode if form_mode in {"", "day", "range"} else "",
+            form_day=_echo_date(form_day),
+            form_start=_echo_date(form_start),
+            form_end=_echo_date(form_end),
+        ),
+        status_code=status_code,
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request) -> Response:
     user = _current_user(request)
     if not user:
         return RedirectResponse("/login", status_code=303)
-    items = storage.list_submissions()
-    return templates.TemplateResponse(
-        request,
-        "home.html",
-        _ctx(request, items=items, error=None, notice=request.query_params.get("notice")),
-    )
+    return _home_response(request, error=None, notice=request.query_params.get("notice"))
 
 
 @app.post("/submit")
@@ -215,22 +287,45 @@ async def submit(
     kind: str = Form(""),
     note: str = Form(""),
     csrf: str = Form(""),
+    record_mode: str = Form(""),
+    record_day: str = Form(""),
+    record_date_start: str = Form(""),
+    record_date_end: str = Form(""),
     files: list[UploadFile] = File(default=[]),
 ) -> Response:
     user = _current_user(request)
     if not user:
         return RedirectResponse("/login", status_code=303)
+    form_mode = (record_mode or "").strip()
     if not _valid_csrf(request, csrf):
-        items = storage.list_submissions()
-        return templates.TemplateResponse(
+        return _home_response(
             request,
-            "home.html",
-            _ctx(request, items=items, error="請重新整理後再提交。", notice=None),
+            error="請重新整理後再提交。",
+            notice=None,
             status_code=400,
+            form_mode=form_mode,
+            form_day=record_day,
+            form_start=record_date_start,
+            form_end=record_date_end,
         )
     if kind not in KINDS:
         kind = "其他"
     note = (note or "").strip()[:2000]
+    try:
+        record_start, record_end = parse_record_dates(
+            form_mode, record_day, record_date_start, record_date_end
+        )
+    except ValueError as exc:
+        return _home_response(
+            request,
+            error=str(exc),
+            notice=None,
+            status_code=400,
+            form_mode=form_mode,
+            form_day=record_day,
+            form_start=record_date_start,
+            form_end=record_date_end,
+        )
     saved: list[tuple[str, bytes]] = []
     total = 0
     errors: list[str] = []
@@ -255,23 +350,36 @@ async def submit(
             break
         saved.append((name, data))
     if errors or not saved:
-        items = storage.list_submissions()
         msg = "；".join(errors) if errors else "請至少選擇一個檔案。"
-        return templates.TemplateResponse(
+        return _home_response(
             request,
-            "home.html",
-            _ctx(request, items=items, error=msg, notice=None),
+            error=msg,
+            notice=None,
             status_code=400,
+            form_mode=form_mode,
+            form_day=record_day,
+            form_start=record_date_start,
+            form_end=record_date_end,
         )
     try:
-        sub_id = storage.create_submission(user=user, kind=kind, note=note, files=saved)
+        sub_id = storage.create_submission(
+            user=user,
+            kind=kind,
+            note=note,
+            files=saved,
+            record_date_start=record_start,
+            record_date_end=record_end,
+        )
     except Exception:
-        items = storage.list_submissions()
-        return templates.TemplateResponse(
+        return _home_response(
             request,
-            "home.html",
-            _ctx(request, items=items, error="儲存失敗，請稍後再試或聯絡管理員。", notice=None),
+            error="儲存失敗，請稍後再試或聯絡管理員。",
+            notice=None,
             status_code=500,
+            form_mode=form_mode,
+            form_day=record_day,
+            form_start=record_date_start,
+            form_end=record_date_end,
         )
     return RedirectResponse(f"/submission/{quote(sub_id)}?notice=submitted", status_code=303)
 
