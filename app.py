@@ -24,6 +24,17 @@ from auth import (
     change_own_password,
     reset_admin_password,
 )
+from roster import (
+    PURPOSE_CUSTOMERS,
+    PURPOSE_ORDERS,
+    ROSTER_CONFIRM,
+    ROSTER_DELETE_CONFIRM,
+    ROSTER_EDIT_CONFIRM,
+    RosterError,
+    RosterNotFound,
+    filter_customers,
+    present_customer,
+)
 from storage import Storage, parse_iso_date, record_date_text
 
 try:
@@ -256,6 +267,7 @@ def _home_response(
     form_day: str = "",
     form_start: str = "",
     form_end: str = "",
+    form_purpose: str = PURPOSE_ORDERS,
 ) -> Response:
     return templates.TemplateResponse(
         request,
@@ -269,6 +281,7 @@ def _home_response(
             form_day=_echo_date(form_day),
             form_start=_echo_date(form_start),
             form_end=_echo_date(form_end),
+            form_purpose=form_purpose if form_purpose in {PURPOSE_ORDERS, PURPOSE_CUSTOMERS} else PURPOSE_ORDERS,
         ),
         status_code=status_code,
     )
@@ -279,7 +292,13 @@ def home(request: Request) -> Response:
     user = _current_user(request)
     if not user:
         return RedirectResponse("/login", status_code=303)
-    return _home_response(request, error=None, notice=request.query_params.get("notice"))
+    requested = (request.query_params.get("purpose") or "").strip()
+    return _home_response(
+        request,
+        error=None,
+        notice=request.query_params.get("notice"),
+        form_purpose=requested if requested in {PURPOSE_ORDERS, PURPOSE_CUSTOMERS} else PURPOSE_ORDERS,
+    )
 
 
 @app.post("/submit")
@@ -292,12 +311,15 @@ async def submit(
     record_day: str = Form(""),
     record_date_start: str = Form(""),
     record_date_end: str = Form(""),
+    purpose: str = Form(""),
     files: list[UploadFile] = File(default=[]),
 ) -> Response:
     user = _current_user(request)
     if not user:
         return RedirectResponse("/login", status_code=303)
     form_mode = (record_mode or "").strip()
+    form_purpose = (purpose or "").strip()
+    echoed_purpose = form_purpose if form_purpose in {PURPOSE_ORDERS, PURPOSE_CUSTOMERS} else PURPOSE_ORDERS
     if not _valid_csrf(request, csrf):
         return _home_response(
             request,
@@ -308,10 +330,23 @@ async def submit(
             form_day=record_day,
             form_start=record_date_start,
             form_end=record_date_end,
+            form_purpose=echoed_purpose,
         )
     if kind not in KINDS:
         kind = "其他"
     note = (note or "").strip()[:2000]
+    if form_purpose not in {"", PURPOSE_ORDERS, PURPOSE_CUSTOMERS}:
+        return _home_response(
+            request,
+            error="請選擇上載用途。",
+            notice=None,
+            status_code=400,
+            form_mode=form_mode,
+            form_day=record_day,
+            form_start=record_date_start,
+            form_end=record_date_end,
+            form_purpose=PURPOSE_ORDERS,
+        )
     try:
         record_start, record_end = parse_record_dates(
             form_mode, record_day, record_date_start, record_date_end
@@ -326,6 +361,7 @@ async def submit(
             form_day=record_day,
             form_start=record_date_start,
             form_end=record_date_end,
+            form_purpose=echoed_purpose,
         )
     saved: list[tuple[str, bytes]] = []
     total = 0
@@ -361,6 +397,7 @@ async def submit(
             form_day=record_day,
             form_start=record_date_start,
             form_end=record_date_end,
+            form_purpose=echoed_purpose,
         )
     try:
         sub_id = storage.create_submission(
@@ -370,6 +407,7 @@ async def submit(
             files=saved,
             record_date_start=record_start,
             record_date_end=record_end,
+            purpose=echoed_purpose,
         )
     except Exception:
         return _home_response(
@@ -381,6 +419,7 @@ async def submit(
             form_day=record_day,
             form_start=record_date_start,
             form_end=record_date_end,
+            form_purpose=echoed_purpose,
         )
     return RedirectResponse(f"/submission/{quote(sub_id)}?notice=submitted", status_code=303)
 
@@ -616,6 +655,347 @@ async def reset_password_submit(
         return _account_page(request, reset_error="暫時無法保存密碼，請稍後再試。", status_code=500)
     request.session["csrf"] = secrets.token_urlsafe(32)
     return RedirectResponse("/account?notice=reset-updated", status_code=303)
+
+
+def _roster_notice(code: str | None) -> str | None:
+    return {
+        "deleted": "已刪除此顧客。",
+        "confirmed": "已確認這位顧客。",
+        "saved": "已儲存更正。",
+    }.get(code or "")
+
+
+def _roster_rows(query: str, which: str) -> tuple[list[dict[str, Any]], int, str]:
+    document = storage.get_roster_document()
+    customers = list(document.get("customers") or [])
+    selected = which if which in {"all", "missing_phone", "pending"} else "all"
+    shown = filter_customers(customers, query, selected)
+    return [present_customer(row) for row in shown], len(customers), selected
+
+
+def _customer_row(customer_id: str) -> dict[str, Any] | None:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{6,64}", customer_id):
+        return None
+    for row in storage.get_roster_document().get("customers") or []:
+        if row.get("id") == customer_id:
+            return present_customer(row)
+    return None
+
+
+def _related_submissions(row: dict[str, Any]) -> list[dict[str, Any]]:
+    found = []
+    for sub_id in row.get("submission_ids") or []:
+        item = storage.get_submission(str(sub_id))
+        if item:
+            found.append(item)
+    return found
+
+
+def _customers_page(
+    request: Request,
+    *,
+    error: str | None = None,
+    status_code: int = 200,
+    query: str = "",
+    which: str = "all",
+) -> Response:
+    rows, total, selected = _roster_rows(query, which)
+    return templates.TemplateResponse(
+        request,
+        "customers.html",
+        _ctx(
+            request,
+            error=error,
+            notice=_roster_notice(request.query_params.get("notice")),
+            rows=rows,
+            total=total,
+            query=query,
+            roster_filter=selected,
+        ),
+        status_code=status_code,
+    )
+
+
+def _customer_page(
+    request: Request,
+    customer: dict[str, Any] | None,
+    *,
+    error: str | None = None,
+    status_code: int = 200,
+    template: str = "customer.html",
+    extra: dict[str, Any] | None = None,
+) -> Response:
+    payload = {
+        "customer": customer,
+        "error": error,
+        "notice": _roster_notice(request.query_params.get("notice")),
+        "related": _related_submissions(customer) if customer else [],
+        "roster_confirm": ROSTER_CONFIRM,
+        "roster_edit_confirm": ROSTER_EDIT_CONFIRM,
+        "roster_delete_confirm": ROSTER_DELETE_CONFIRM,
+    }
+    if extra:
+        payload.update(extra)
+    return templates.TemplateResponse(
+        request,
+        template,
+        _ctx(request, **payload),
+        status_code=status_code,
+    )
+
+
+def _roster_forbidden(request: Request, customer: dict[str, Any] | None) -> Response:
+    if customer:
+        return _customer_page(request, customer, error="沒有權限。", status_code=403)
+    return _customer_page(request, None, error="沒有權限。", status_code=403)
+
+
+@app.get("/customers", response_class=HTMLResponse)
+def customers_page(request: Request) -> Response:
+    if not _current_user(request):
+        return RedirectResponse("/login", status_code=303)
+    return _customers_page(
+        request,
+        query=(request.query_params.get("q") or "").strip(),
+        which=(request.query_params.get("filter") or "all").strip(),
+    )
+
+
+@app.get("/customers/roster.xlsx")
+def download_roster(request: Request) -> Response:
+    user = _current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    workbook = storage.roster_workbook()
+    filename = quote("顧客名冊.xlsx")
+    return Response(
+        content=workbook,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=\"roster.xlsx\"; filename*=UTF-8''{filename}"},
+    )
+
+
+@app.get("/customers/{customer_id}", response_class=HTMLResponse)
+def customer_page(request: Request, customer_id: str) -> Response:
+    if not _current_user(request):
+        return RedirectResponse("/login", status_code=303)
+    customer = _customer_row(customer_id)
+    if not customer:
+        return _customer_page(request, None, status_code=404)
+    return _customer_page(request, customer)
+
+
+@app.get("/customers/{customer_id}/confirm", response_class=HTMLResponse)
+def customer_confirm_page(request: Request, customer_id: str) -> Response:
+    user = _current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    customer = _customer_row(customer_id)
+    if STAFF.get(user) != "super_admin":
+        return _roster_forbidden(request, customer)
+    if not customer:
+        return _customer_page(request, None, status_code=404)
+    return _customer_page(request, customer, template="customer_confirm.html")
+
+
+@app.post("/customers/{customer_id}/confirm")
+async def customer_confirm_submit(
+    request: Request,
+    customer_id: str,
+    csrf: str = Form(""),
+    confirm: str = Form(""),
+    phone_choice: str = Form(""),
+) -> Response:
+    user = _current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    customer = _customer_row(customer_id)
+    if STAFF.get(user) != "super_admin":
+        return _roster_forbidden(request, customer)
+    if not customer:
+        return _customer_page(request, None, status_code=404)
+    if not _valid_csrf(request, csrf):
+        return _customer_page(
+            request,
+            customer,
+            error="請重新整理後再試。",
+            status_code=400,
+            template="customer_confirm.html",
+        )
+    if confirm != ROSTER_CONFIRM:
+        return _customer_page(
+            request,
+            customer,
+            error="請先確認再標記。",
+            status_code=400,
+            template="customer_confirm.html",
+        )
+    try:
+        storage.confirm_customer(user, customer_id, phone_choice)
+    except RosterNotFound:
+        return _customer_page(request, None, status_code=404)
+    except PermissionError:
+        return _roster_forbidden(request, customer)
+    except RosterError as exc:
+        return _customer_page(
+            request,
+            _customer_row(customer_id) or customer,
+            error=str(exc),
+            status_code=400,
+            template="customer_confirm.html",
+        )
+    except Exception:
+        return _customer_page(
+            request,
+            customer,
+            error="暫時無法儲存，請稍後再試。",
+            status_code=500,
+            template="customer_confirm.html",
+        )
+    return RedirectResponse(f"/customers/{quote(customer_id)}?notice=confirmed", status_code=303)
+
+
+@app.get("/customers/{customer_id}/edit", response_class=HTMLResponse)
+def customer_edit_page(request: Request, customer_id: str) -> Response:
+    user = _current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    customer = _customer_row(customer_id)
+    if STAFF.get(user) != "super_admin":
+        return _roster_forbidden(request, customer)
+    if not customer:
+        return _customer_page(request, None, status_code=404)
+    return _customer_page(
+        request,
+        customer,
+        template="customer_edit.html",
+        extra={"edit_name": customer["name"], "edit_phone": customer["phone"], "edit_note": customer["note"]},
+    )
+
+
+@app.post("/customers/{customer_id}/edit")
+async def customer_edit_submit(
+    request: Request,
+    customer_id: str,
+    csrf: str = Form(""),
+    confirm: str = Form(""),
+    name: str = Form(""),
+    phone: str = Form(""),
+    note: str = Form(""),
+) -> Response:
+    user = _current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    customer = _customer_row(customer_id)
+    if STAFF.get(user) != "super_admin":
+        return _roster_forbidden(request, customer)
+    if not customer:
+        return _customer_page(request, None, status_code=404)
+    edit_extra = {"edit_name": name, "edit_phone": phone, "edit_note": note}
+    if not _valid_csrf(request, csrf):
+        return _customer_page(
+            request,
+            customer,
+            error="請重新整理後再試。",
+            status_code=400,
+            template="customer_edit.html",
+            extra=edit_extra,
+        )
+    if confirm != ROSTER_EDIT_CONFIRM:
+        return _customer_page(
+            request,
+            customer,
+            error="請先確認再儲存。",
+            status_code=400,
+            template="customer_edit.html",
+            extra=edit_extra,
+        )
+    try:
+        storage.edit_customer(user, customer_id, name, phone, note)
+    except RosterNotFound:
+        return _customer_page(request, None, status_code=404)
+    except PermissionError:
+        return _roster_forbidden(request, customer)
+    except RosterError as exc:
+        return _customer_page(
+            request,
+            _customer_row(customer_id) or customer,
+            error=str(exc),
+            status_code=400,
+            template="customer_edit.html",
+            extra=edit_extra,
+        )
+    except Exception:
+        return _customer_page(
+            request,
+            customer,
+            error="暫時無法儲存，請稍後再試。",
+            status_code=500,
+            template="customer_edit.html",
+            extra=edit_extra,
+        )
+    return RedirectResponse(f"/customers/{quote(customer_id)}?notice=saved", status_code=303)
+
+
+@app.get("/customers/{customer_id}/delete", response_class=HTMLResponse)
+def customer_delete_page(request: Request, customer_id: str) -> Response:
+    user = _current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    customer = _customer_row(customer_id)
+    if STAFF.get(user) != "super_admin":
+        return _roster_forbidden(request, customer)
+    if not customer:
+        return _customer_page(request, None, status_code=404)
+    return _customer_page(request, customer, template="customer_delete.html")
+
+
+@app.post("/customers/{customer_id}/delete")
+async def customer_delete_submit(
+    request: Request,
+    customer_id: str,
+    csrf: str = Form(""),
+    confirm: str = Form(""),
+) -> Response:
+    user = _current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    customer = _customer_row(customer_id)
+    if STAFF.get(user) != "super_admin":
+        return _roster_forbidden(request, customer)
+    if not customer:
+        return _customer_page(request, None, status_code=404)
+    if not _valid_csrf(request, csrf):
+        return _customer_page(
+            request,
+            customer,
+            error="請重新整理後再試。",
+            status_code=400,
+            template="customer_delete.html",
+        )
+    if confirm != ROSTER_DELETE_CONFIRM:
+        return _customer_page(
+            request,
+            customer,
+            error="請先確認再刪除。",
+            status_code=400,
+            template="customer_delete.html",
+        )
+    try:
+        storage.delete_customer(user, customer_id)
+    except RosterNotFound:
+        return _customer_page(request, None, status_code=404)
+    except PermissionError:
+        return _roster_forbidden(request, customer)
+    except Exception:
+        return _customer_page(
+            request,
+            customer,
+            error="暫時無法刪除，請稍後再試。",
+            status_code=500,
+            template="customer_delete.html",
+        )
+    return RedirectResponse("/customers?notice=deleted", status_code=303)
 
 
 @app.get("/favicon.ico")

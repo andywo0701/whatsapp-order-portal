@@ -12,10 +12,26 @@
 <section class="card">
   <p class="eyebrow">{{ role_label }} · {{ role_title }}</p>
   <h1>歡迎回來</h1>
-  <p class="muted">{{ user }}，把對話導出、圈好的圖片或聯絡人截圖交給我們就好。可以選擇這些紀錄屬於哪一天。單檔上限 40MB，一次最多 80MB。</p>
+  <p class="muted">{{ user }}，選擇落單資料或客戶資料，再把檔案交給我們。可以選擇這些紀錄屬於哪一天。單檔上限 40MB，一次最多 80MB。客戶資料只會保存檔案，這個網站不會從圖片讀取姓名或電話。</p>
+  <p class="hint"><a href="/customers">查看顧客名冊</a></p>
   <form method="post" action="/submit" enctype="multipart/form-data" class="stack">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     {% set mode = form_mode|default('', true) %}
+    {% set purpose = form_purpose|default('orders', true) %}
+    <fieldset class="date-window" id="upload-purpose">
+      <legend>上載用途</legend>
+      <p class="hint" id="purpose-hint">落單資料是對話導出和落單圖片。客戶資料是聯絡人截圖，或含有電話的對話，用來填寫顧客名冊。這個網站不會從圖片讀取姓名或電話。</p>
+      <div class="date-modes">
+        <label class="chip">
+          <input type="radio" name="purpose" value="orders"{% if purpose != 'customers' %} checked{% endif %}>
+          落單資料
+        </label>
+        <label class="chip">
+          <input type="radio" name="purpose" value="customers"{% if purpose == 'customers' %} checked{% endif %}>
+          客戶資料
+        </label>
+      </div>
+    </fieldset>
     <label>類型
       <select name="kind" required>
         {% for k in kinds %}
@@ -73,6 +89,7 @@
       <a class="feed-link" href="/submission/{{ item.id }}">
         <span class="feed-top">
           <span class="feed-title">{{ item.kind }}</span>
+          <span class="tag tag-purpose-{{ item.purpose }}">{{ item.purpose_label }}</span>
           <span class="tag tag-{{ item.status }}">{{ item.status_label }}</span>
         </span>
         <span class="feed-meta">{{ item.submitted_display }} · {{ item.files|length }} 個檔案{% if item.result_files %} · 結果 {{ item.result_files|length }} 個{% endif %}</span>

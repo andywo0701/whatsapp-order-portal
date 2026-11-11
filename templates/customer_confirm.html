@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}確認顧客｜顧客名冊{% endblock %}
+{% block content %}
+<p class="crumb"><a href="/customers/{{ customer.id }}">返回這位顧客</a></p>
+{% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+<section class="card">
+  <p class="eyebrow">超級管理員 · Super Admin</p>
+  <h1>{{ roster_confirm }}</h1>
+  <p class="muted">確認之後，這位顧客會標成正常。如果有多於一個電話，請自己選一個，系統不會代選。</p>
+  <dl class="meta">
+    <dt>顧客姓名</dt><dd>{{ customer.name_display }}</dd>
+    <dt>電話</dt><dd>{% if customer.phone_missing %}<span class="phone-missing">尚缺</span>{% else %}{{ customer.phone_display }}{% endif %}</dd>
+    <dt>狀態</dt><dd><span class="tag tag-{{ customer.status }}">{{ customer.status_label }}</span></dd>
+  </dl>
+  <form method="post" action="/customers/{{ customer.id }}/confirm" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    {% if customer.conflict %}
+    <fieldset class="date-window">
+      <legend>保留哪一個電話</legend>
+      <div class="choice-list">
+        {% for item in customer.phones %}
+        <label class="chip choice">
+          <input type="radio" name="phone_choice" value="{{ item.phone }}" required>
+          <span>{{ item.phone }} · {{ item.source_label }}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    {% endif %}
+    <div class="confirm-actions">
+      <button type="submit" class="btn primary" name="confirm" value="{{ roster_confirm }}">確定確認</button>
+      <a class="btn ghost" href="/customers/{{ customer.id }}">取消</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

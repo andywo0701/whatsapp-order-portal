@@ -10,8 +10,23 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
 from huggingface_hub.errors import EntryNotFoundError, RepositoryNotFoundError
+
+from roster import (
+    PURPOSE_LABELS,
+    ROSTER_JSON_PATH,
+    ROSTER_XLSX_PATH,
+    apply_confirm,
+    apply_delete,
+    apply_edit,
+    canonical_purpose,
+    empty_document,
+    merge_rosters,
+    parse_roster_text,
+    purpose_of,
+    roster_xlsx_bytes,
+)
 
 HK = ZoneInfo("Asia/Hong_Kong")
 SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
@@ -142,9 +157,11 @@ class Storage:
         files: list[tuple[str, bytes]],
         record_date_start: str | None = None,
         record_date_end: str | None = None,
+        purpose: str | None = None,
     ) -> str:
         # Validate before creating a folder so a bad window never becomes a submission.
         start, end = canonical_record_dates(record_date_start, record_date_end)
+        chosen_purpose = canonical_purpose(purpose)
         now = datetime.now(HK)
         sub_id = now.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
         used: set[str] = set()
@@ -172,6 +189,7 @@ class Storage:
             "status_label": "待處理",
             "result_files": [],
             "admin_note": "",
+            "purpose": chosen_purpose,
         }
         if start is not None and end is not None:
             manifest["record_date_start"] = start
@@ -390,6 +408,8 @@ class Storage:
         out["record_date_label"] = record_date_label(
             out["record_date_start"], out["record_date_end"]
         )
+        out["purpose"] = purpose_of(out.get("purpose"))
+        out["purpose_label"] = PURPOSE_LABELS[out["purpose"]]
         return out
 
     def _format_time(self, value: str) -> str:
@@ -400,6 +420,96 @@ class Storage:
             return dt.astimezone(HK).strftime("%Y-%m-%d %H:%M") + " HKT"
         except Exception:
             return value
+
+    def get_roster_document(self) -> dict[str, Any]:
+        """Roster for the signed-in page. A missing customers/ folder is an empty roster."""
+        local = self._read_local_roster()
+        if not self.is_ready():
+            return local
+        remote = self._download_roster()
+        if remote is None:
+            return local
+        return merge_rosters(local, remote)
+
+    def save_roster_document(self, document: dict[str, Any], message: str) -> None:
+        """Publish to the dataset first. A failed upload leaves the local roster unchanged."""
+        payload = json.dumps(document, ensure_ascii=False, indent=2).encode("utf-8")
+        workbook = roster_xlsx_bytes(document)
+        if self.is_ready():
+            self.ensure_repo()
+            self._api_client().create_commit(
+                repo_id=self.repo_id,
+                repo_type="dataset",
+                operations=[
+                    CommitOperationAdd(path_in_repo=ROSTER_JSON_PATH, path_or_fileobj=payload),
+                    CommitOperationAdd(path_in_repo=ROSTER_XLSX_PATH, path_or_fileobj=workbook),
+                ],
+                commit_message=message,
+            )
+        self._write_local_roster(payload, workbook)
+
+    def confirm_customer(self, actor: str, customer_id: str, phone_choice: str) -> dict[str, Any]:
+        updated = apply_confirm(self.get_roster_document(), customer_id, actor, phone_choice)
+        self.save_roster_document(updated, f"Confirm roster customer {customer_id}")
+        return updated
+
+    def edit_customer(
+        self, actor: str, customer_id: str, name: str, phone: str, note: str
+    ) -> dict[str, Any]:
+        updated = apply_edit(self.get_roster_document(), customer_id, actor, name, phone, note)
+        self.save_roster_document(updated, f"Correct roster customer {customer_id}")
+        return updated
+
+    def delete_customer(self, actor: str, customer_id: str) -> dict[str, Any]:
+        updated = apply_delete(self.get_roster_document(), customer_id, actor)
+        self.save_roster_document(updated, f"Delete roster customer {customer_id}")
+        return updated
+
+    def roster_workbook(self) -> bytes:
+        return roster_xlsx_bytes(self.get_roster_document())
+
+    def _roster_json_path(self) -> Path:
+        return self.local_root / "customers" / "roster.json"
+
+    def _read_local_roster(self) -> dict[str, Any]:
+        path = self._roster_json_path()
+        if not path.is_file():
+            return empty_document()
+        try:
+            parsed = parse_roster_text(path.read_text(encoding="utf-8"))
+        except OSError:
+            return empty_document()
+        return parsed if parsed is not None else empty_document()
+
+    def _download_roster(self) -> dict[str, Any] | None:
+        """Empty document when customers/roster.json is absent. None when the hub cannot be read."""
+        try:
+            downloaded = hf_hub_download(
+                repo_id=self.repo_id,
+                repo_type="dataset",
+                filename=ROSTER_JSON_PATH,
+                token=self.token,
+                force_download=True,
+            )
+            parsed = parse_roster_text(Path(downloaded).read_text(encoding="utf-8"))
+        except (EntryNotFoundError, RepositoryNotFoundError):
+            return empty_document()
+        except Exception:
+            return None
+        return parsed
+
+    def _write_local_roster(self, payload: bytes, workbook: bytes) -> None:
+        folder = self.local_root / "customers"
+        folder.mkdir(parents=True, exist_ok=True)
+        self._replace_private(folder / "roster.json", payload)
+        self._replace_private(folder / "roster.xlsx", workbook)
+
+    def _replace_private(self, path: Path, payload: bytes) -> None:
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_bytes(payload)
+        os.chmod(temporary, 0o600)
+        temporary.replace(path)
+        os.chmod(path, 0o600)
 
     def refresh_password_records(self) -> dict[str, dict[str, Any]]:
         remote = self._download_password_records()

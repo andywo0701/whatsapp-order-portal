@@ -13,6 +13,7 @@
     <dt>編號</dt><dd>{{ item.id }}</dd>
     <dt>時間</dt><dd>{{ item.submitted_display }}</dd>
     <dt>類型</dt><dd>{{ item.kind }}</dd>
+    <dt>用途</dt><dd>{{ item.purpose_label }}</dd>
     <dt>紀錄日期</dt><dd>{% if item.record_date_label %}{{ item.record_date_label }}{% else %}<span class="unset">未指定日期</span>{% endif %}</dd>
     <dt>狀態</dt><dd><span class="tag tag-{{ item.status }}">{{ item.status_label }}</span></dd>
     {% if item.deleted and item.deleted_by %}
@@ -37,7 +38,12 @@
     {% endfor %}
   </ul>
   {% else %}
+  {% if item.purpose == "customers" %}
+  <p class="muted quiet">結果還沒準備好。掃描程式處理完這批客戶資料後，顧客名冊會更新。這個網站不會從圖片讀取姓名或電話。</p>
+  <p class="back"><a href="/customers">查看顧客名冊</a></p>
+  {% else %}
   <p class="muted quiet">結果還沒準備好。處理完成後，落單 Excel 會出現在這裡供下載。</p>
+  {% endif %}
   {% endif %}
 
   {% if item.deleted %}
