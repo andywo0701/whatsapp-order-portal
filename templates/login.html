@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}登入｜WhatsApp 落單上載{% endblock %}
+{% block content %}
+<section class="card login-card">
+  <h1>登入</h1>
+  <p class="muted">此頁只供獲授權的同事上載或下載落單資料，請保管好帳號密碼。</p>
+  {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+  {% if configured %}
+  <form method="post" action="/login" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>帳號
+      <input type="text" name="username" autocomplete="username" required>
+    </label>
+    <label>密碼
+      <input type="password" name="password" autocomplete="current-password" required>
+    </label>
+    <button type="submit" class="btn primary">登入</button>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}

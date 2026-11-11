@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}提交 {{ item.id }}｜WhatsApp 落單上載{% endblock %}
+{% block content %}
+<p class="crumb"><a href="/">返回列表</a></p>
+{% if notice == "submitted" %}
+<p class="alert ok">已收到你的上載，我們會處理後把 Excel 放回這裡。</p>
+{% endif %}
+<section class="card">
+  <h1>提交詳情</h1>
+  <dl class="meta">
+    <dt>編號</dt><dd>{{ item.id }}</dd>
+    <dt>時間</dt><dd>{{ item.submitted_display }}</dd>
+    <dt>類型</dt><dd>{{ item.kind }}</dd>
+    <dt>狀態</dt><dd><span class="tag tag-{{ item.status }}">{{ item.status_label }}</span></dd>
+    {% if item.note %}<dt>備註</dt><dd>{{ item.note }}</dd>{% endif %}
+    {% if item.admin_note %}<dt>處理說明</dt><dd>{{ item.admin_note }}</dd>{% endif %}
+  </dl>
+
+  <h2>已上載檔案</h2>
+  <ul class="files">
+    {% for name in item.files %}
+    <li><a href="/download/{{ item.id }}/files/{{ name }}">{{ name }}</a></li>
+    {% endfor %}
+  </ul>
+
+  <h2>處理結果</h2>
+  {% if item.result_files %}
+  <ul class="files">
+    {% for name in item.result_files %}
+    <li><a href="/download/{{ item.id }}/results/{{ name }}">{{ name }}</a></li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">結果尚未準備好。處理完成後，完整落單 Excel 會出現在這裡供下載。</p>
+  {% endif %}
+</section>
+{% endblock %}

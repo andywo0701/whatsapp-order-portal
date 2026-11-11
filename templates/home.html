@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+{% if notice == "submitted" %}
+<p class="alert ok">已收到你的上載，我們會處理後把 Excel 放回這裡。</p>
+{% endif %}
+{% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+
+<section class="card">
+  <h1>上載落單資料</h1>
+  <p class="muted">可上載 WhatsApp 對話導出、圈了貨品或數量的圖片、群組聯絡人截圖。單檔上限 40MB，一次最多 80MB。</p>
+  <form method="post" action="/submit" enctype="multipart/form-data" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>類型
+      <select name="kind" required>
+        {% for k in kinds %}
+        <option value="{{ k }}" {% if k == "新單" %}selected{% endif %}>{{ k }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>備註（可選）
+      <textarea name="note" rows="3" maxlength="2000" placeholder="例如改單內容、要取消的貨品，或需要特別注意的地方"></textarea>
+    </label>
+    <label>檔案
+      <input type="file" name="files" multiple required accept=".jpg,.jpeg,.png,.webp,.gif,.heic,.heif,.pdf,.txt,.zip,.xlsx,.xls,.csv,.doc,.docx,image/*">
+    </label>
+    <button type="submit" class="btn primary">提交</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>近期提交</h2>
+  {% if items %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>時間</th>
+          <th>類型</th>
+          <th>狀態</th>
+          <th>檔案</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in items %}
+        <tr>
+          <td><a href="/submission/{{ item.id }}">{{ item.submitted_display }}</a></td>
+          <td>{{ item.kind }}</td>
+          <td><span class="tag tag-{{ item.status }}">{{ item.status_label }}</span></td>
+          <td>{{ item.files|length }} 個{% if item.result_files %} · 結果 {{ item.result_files|length }} 個{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">尚未有提交紀錄。</p>
+  {% endif %}
+</section>
+{% endblock %}
