@@ -78,6 +78,16 @@ def record_date_label(start: object, end: object) -> str:
     return start_text or end_text
 
 
+def manifest_deleted(item: dict[str, Any]) -> bool:
+    """True when this manifest was soft-deleted. Missing fields are not deleted."""
+    if not isinstance(item, dict):
+        return False
+    if str(item.get("status") or "") == "deleted":
+        return True
+    deleted_at = item.get("deleted_at")
+    return isinstance(deleted_at, str) and bool(deleted_at.strip())
+
+
 class Storage:
     def __init__(self) -> None:
         self.repo_id = os.environ.get("INBOX_DATASET") or os.environ.get("HF_DATASET") or ""
@@ -249,6 +259,39 @@ class Storage:
         item = self._refresh_from_hub(sub_id) or self._load_local_manifest(sub_id)
         return self._present(item) if item else None
 
+    def soft_delete_submission(self, sub_id: str, actor: str) -> dict[str, Any] | None:
+        """Mark a submission 已刪除. Uploaded files stay where they are."""
+        from auth import STAFF
+
+        if STAFF.get(actor) != "super_admin":
+            raise PermissionError("沒有權限。")
+        if not SAFE_ID.fullmatch(sub_id):
+            return None
+        raw = self._refresh_from_hub(sub_id) or self._load_local_manifest(sub_id)
+        if not isinstance(raw, dict):
+            return None
+        if manifest_deleted(raw):
+            return self._present(raw)
+        updated = dict(raw)
+        updated["status"] = "deleted"
+        updated["status_label"] = "已刪除"
+        updated["deleted_by"] = actor
+        updated["deleted_at"] = datetime.now(HK).isoformat()
+        payload = json.dumps(updated, ensure_ascii=False, indent=2).encode("utf-8")
+        # Publish the manifest first. A failed upload leaves the local copy unchanged.
+        if self.is_ready():
+            self.ensure_repo()
+            self._api_client().upload_file(
+                path_or_fileobj=payload,
+                path_in_repo=f"inbox/{sub_id}/manifest.json",
+                repo_id=self.repo_id,
+                repo_type="dataset",
+                commit_message=f"Mark submission {sub_id} deleted",
+            )
+        local = self._local_dir(sub_id)
+        (local / "manifest.json").write_bytes(payload)
+        return self._present(updated)
+
     def list_submissions(self) -> list[dict[str, Any]]:
         found: dict[str, dict[str, Any]] = {}
         if self.local_root.exists():
@@ -280,7 +323,8 @@ class Storage:
                             found[sub_id] = refreshed
             except Exception:
                 pass
-        items = [self._present(v) for v in found.values()]
+        items = [self._present(v) for v in found.values() if isinstance(v, dict)]
+        items = [item for item in items if not item.get("deleted")]
         items.sort(key=lambda x: x.get("submitted_at") or "", reverse=True)
         return items
 
@@ -315,14 +359,26 @@ class Storage:
     def _present(self, item: dict[str, Any]) -> dict[str, Any]:
         out = dict(item)
         status = str(out.get("status") or "pending")
+        deleted = manifest_deleted(out)
         labels = {
             "pending": "待處理",
             "processing": "處理中",
             "done": "已完成",
             "need_info": "待補資料",
+            "deleted": "已刪除",
         }
+        if deleted:
+            status = "deleted"
+            out["status_label"] = "已刪除"
+        else:
+            out["status_label"] = out.get("status_label") or labels.get(status, status)
         out["status"] = status
-        out["status_label"] = out.get("status_label") or labels.get(status, status)
+        out["deleted"] = deleted
+        deleted_by = out.get("deleted_by") if isinstance(out.get("deleted_by"), str) else ""
+        deleted_at = out.get("deleted_at") if isinstance(out.get("deleted_at"), str) else ""
+        out["deleted_by"] = deleted_by.strip() if deleted else ""
+        out["deleted_at"] = deleted_at.strip() if deleted else ""
+        out["deleted_display"] = self._format_time(out["deleted_at"]) if deleted and out["deleted_at"] else ""
         out["files"] = [Path(str(n)).name for n in (out.get("files") or []) if n]
         out["result_files"] = [Path(str(n)).name for n in (out.get("result_files") or []) if n]
         out["note"] = out.get("note") or ""

@@ -41,6 +41,7 @@ MAX_FILES = 40
 MAX_FILE_BYTES = 40 * 1024 * 1024
 MAX_TOTAL_BYTES = 80 * 1024 * 1024
 KINDS = ["新單", "改單", "取消", "聯絡人截圖", "其他"]
+DELETE_CONFIRM = "確定刪除此提交？"
 LOGIN_WINDOW = 15 * 60
 LOGIN_MAX_TRIES = 8
 
@@ -401,6 +402,88 @@ def submission_page(request: Request, sub_id: str) -> Response:
         "submission.html",
         _ctx(request, item=item, notice=request.query_params.get("notice")),
     )
+
+
+def _delete_page(
+    request: Request,
+    item: dict[str, Any],
+    error: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "delete.html",
+        _ctx(request, item=item, error=error, delete_confirm=DELETE_CONFIRM),
+        status_code=status_code,
+    )
+
+
+def _delete_forbidden(request: Request, item: dict[str, Any] | None) -> Response:
+    if not item:
+        return templates.TemplateResponse(
+            request, "missing.html", _ctx(request), status_code=404
+        )
+    return templates.TemplateResponse(
+        request,
+        "submission.html",
+        _ctx(request, item=item, notice=None, error="沒有權限。"),
+        status_code=403,
+    )
+
+
+@app.get("/submission/{sub_id}/delete", response_class=HTMLResponse)
+def delete_confirm(request: Request, sub_id: str) -> Response:
+    user = _current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{6,64}", sub_id):
+        return RedirectResponse("/", status_code=303)
+    item = storage.get_submission(sub_id)
+    if STAFF.get(user) != "super_admin":
+        return _delete_forbidden(request, item)
+    if not item:
+        return templates.TemplateResponse(
+            request, "missing.html", _ctx(request), status_code=404
+        )
+    return _delete_page(request, item)
+
+
+@app.post("/submission/{sub_id}/delete")
+async def delete_submit(
+    request: Request,
+    sub_id: str,
+    csrf: str = Form(""),
+    confirm: str = Form(""),
+) -> Response:
+    user = _current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{6,64}", sub_id):
+        return RedirectResponse("/", status_code=303)
+    item = storage.get_submission(sub_id)
+    if STAFF.get(user) != "super_admin":
+        return _delete_forbidden(request, item)
+    if not item:
+        return templates.TemplateResponse(
+            request, "missing.html", _ctx(request), status_code=404
+        )
+    if not _valid_csrf(request, csrf):
+        return _delete_page(request, item, error="請重新整理後再試。", status_code=400)
+    if confirm != DELETE_CONFIRM:
+        return _delete_page(request, item, error="請先確認再刪除。", status_code=400)
+    if item.get("deleted"):
+        return RedirectResponse("/?notice=deleted", status_code=303)
+    try:
+        updated = storage.soft_delete_submission(sub_id, user)
+    except PermissionError:
+        return _delete_forbidden(request, item)
+    except Exception:
+        return _delete_page(request, item, error="暫時無法刪除，請稍後再試。", status_code=500)
+    if not updated:
+        return templates.TemplateResponse(
+            request, "missing.html", _ctx(request), status_code=404
+        )
+    return RedirectResponse("/?notice=deleted", status_code=303)
 
 
 @app.get("/download/{sub_id}/{kind}/{filename}")

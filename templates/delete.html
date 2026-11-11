@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}確認刪除｜落單上載{% endblock %}
+{% block content %}
+<p class="crumb"><a href="/submission/{{ item.id }}">返回這筆提交</a></p>
+{% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+<section class="card">
+  <p class="eyebrow">超級管理員 · Super Admin</p>
+  {% if item.deleted %}
+  <h1>這筆提交已經刪除</h1>
+  <p class="muted">它已標成已刪除，不會出現在近期列表。上載檔案仍然留在原處。</p>
+  {% if item.deleted_by %}
+  <p class="deleted-note">由 {{ item.deleted_by }}{% if item.deleted_display %} 於 {{ item.deleted_display }}{% endif %}刪除。</p>
+  {% endif %}
+  <p class="back"><a class="btn ghost" href="/">返回列表</a></p>
+  {% else %}
+  <h1>{{ delete_confirm }}</h1>
+  <p class="muted">確認之後，這筆提交會標成已刪除，並從近期列表隱藏。上載檔案不會被清掉。</p>
+  <dl class="meta">
+    <dt>編號</dt><dd>{{ item.id }}</dd>
+    <dt>時間</dt><dd>{{ item.submitted_display }}</dd>
+    <dt>類型</dt><dd>{{ item.kind }}</dd>
+    <dt>紀錄日期</dt><dd>{% if item.record_date_label %}{{ item.record_date_label }}{% else %}<span class="unset">未指定日期</span>{% endif %}</dd>
+    <dt>狀態</dt><dd><span class="tag tag-{{ item.status }}">{{ item.status_label }}</span></dd>
+  </dl>
+  <div class="confirm-actions">
+    <form method="post" action="/submission/{{ item.id }}/delete">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit" class="btn danger" name="confirm" value="{{ delete_confirm }}">確定刪除</button>
+    </form>
+    <a class="btn ghost" href="/submission/{{ item.id }}">取消</a>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

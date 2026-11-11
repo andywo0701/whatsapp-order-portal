@@ -4,6 +4,9 @@
 {% if notice == "submitted" %}
 <p class="alert ok">已收到你的上載，處理好的 Excel 會放回這裡。</p>
 {% endif %}
+{% if notice == "deleted" %}
+<p class="alert ok">已刪除此提交，近期列表不會再顯示。</p>
+{% endif %}
 {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
 
 <section class="card">
@@ -66,7 +69,7 @@
   {% if items %}
   <ul class="feed">
     {% for item in items %}
-    <li>
+    <li class="feed-row">
       <a class="feed-link" href="/submission/{{ item.id }}">
         <span class="feed-top">
           <span class="feed-title">{{ item.kind }}</span>
@@ -75,6 +78,9 @@
         <span class="feed-meta">{{ item.submitted_display }} · {{ item.files|length }} 個檔案{% if item.result_files %} · 結果 {{ item.result_files|length }} 個{% endif %}</span>
         <span class="feed-date{% if not item.record_date_label %} is-empty{% endif %}">{% if item.record_date_label %}紀錄 {{ item.record_date_label }}{% else %}未指定日期{% endif %}</span>
       </a>
+      {% if role == "super_admin" %}
+      <a class="btn quiet-danger feed-delete" href="/submission/{{ item.id }}/delete">刪除</a>
+      {% endif %}
     </li>
     {% endfor %}
   </ul>

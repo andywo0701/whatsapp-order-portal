@@ -5,6 +5,7 @@
 {% if notice == "submitted" %}
 <p class="alert ok">已收到你的上載，處理好的 Excel 會放回這裡。</p>
 {% endif %}
+{% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
 <section class="card">
   <p class="eyebrow">提交詳情</p>
   <h1>這筆提交</h1>
@@ -14,6 +15,9 @@
     <dt>類型</dt><dd>{{ item.kind }}</dd>
     <dt>紀錄日期</dt><dd>{% if item.record_date_label %}{{ item.record_date_label }}{% else %}<span class="unset">未指定日期</span>{% endif %}</dd>
     <dt>狀態</dt><dd><span class="tag tag-{{ item.status }}">{{ item.status_label }}</span></dd>
+    {% if item.deleted and item.deleted_by %}
+    <dt>刪除紀錄</dt><dd>由 {{ item.deleted_by }}{% if item.deleted_display %} 於 {{ item.deleted_display }}{% endif %}刪除</dd>
+    {% endif %}
     {% if item.note %}<dt>備註</dt><dd>{{ item.note }}</dd>{% endif %}
     {% if item.admin_note %}<dt>處理說明</dt><dd>{{ item.admin_note }}</dd>{% endif %}
   </dl>
@@ -34,6 +38,16 @@
   </ul>
   {% else %}
   <p class="muted quiet">結果還沒準備好。處理完成後，落單 Excel 會出現在這裡供下載。</p>
+  {% endif %}
+
+  {% if item.deleted %}
+  <p class="deleted-note">這筆提交已標成已刪除，不會出現在近期列表。上載檔案仍留在原處。</p>
+  {% elif role == "super_admin" %}
+  <div class="delete-panel">
+    <h2>刪除這筆提交</h2>
+    <p class="muted">只有超級管理員可以刪除舊紀錄。下一步會先請你確認，檔案不會在這一步被清掉。</p>
+    <a class="btn quiet-danger" href="/submission/{{ item.id }}/delete">刪除這筆提交</a>
+  </div>
   {% endif %}
 </section>
 {% endblock %}
