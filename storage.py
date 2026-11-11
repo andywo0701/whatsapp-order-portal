@@ -5,7 +5,7 @@ import os
 import re
 import secrets
 import tempfile
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -16,7 +16,66 @@ from huggingface_hub.errors import EntryNotFoundError, RepositoryNotFoundError
 HK = ZoneInfo("Asia/Hong_Kong")
 SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 SAFE_NAME = re.compile(r"^[A-Za-z0-9._\u4e00-\u9fff\-()+ ]+$")
+ISO_DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 ACCOUNTS_REPO_PATH = "users/accounts.json"
+
+
+def parse_iso_date(value: object) -> date | None:
+    """Parse a calendar date. Blank is None. Anything else invalid raises ValueError."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("invalid record date")
+    text = value.strip()
+    if not text:
+        return None
+    if not ISO_DATE.fullmatch(text):
+        raise ValueError("invalid record date")
+    try:
+        return date.fromisoformat(text)
+    except ValueError as exc:
+        raise ValueError("invalid record date") from exc
+
+
+def record_date_text(value: object) -> str:
+    """YYYY-MM-DD when the value is a real date, otherwise empty. Does not invent one."""
+    if not isinstance(value, str):
+        return ""
+    try:
+        parsed = parse_iso_date(value)
+    except ValueError:
+        return ""
+    return parsed.isoformat() if parsed else ""
+
+
+def canonical_record_dates(
+    start: str | None, end: str | None
+) -> tuple[str | None, str | None]:
+    """Normalize an optional window. One chosen day is stored as the same start and end."""
+    start_day = parse_iso_date(start)
+    end_day = parse_iso_date(end)
+    if start_day is None and end_day is None:
+        return None, None
+    if start_day is None and end_day is not None:
+        iso = end_day.isoformat()
+        return iso, iso
+    if end_day is None and start_day is not None:
+        iso = start_day.isoformat()
+        return iso, iso
+    assert start_day is not None and end_day is not None
+    if end_day < start_day:
+        raise ValueError("record date end before start")
+    return start_day.isoformat(), end_day.isoformat()
+
+
+def record_date_label(start: object, end: object) -> str:
+    start_text = record_date_text(start)
+    end_text = record_date_text(end)
+    if start_text and end_text:
+        if start_text == end_text:
+            return start_text
+        return f"{start_text} 至 {end_text}"
+    return start_text or end_text
 
 
 class Storage:
@@ -66,8 +125,16 @@ class Storage:
         return path
 
     def create_submission(
-        self, user: str, kind: str, note: str, files: list[tuple[str, bytes]]
+        self,
+        user: str,
+        kind: str,
+        note: str,
+        files: list[tuple[str, bytes]],
+        record_date_start: str | None = None,
+        record_date_end: str | None = None,
     ) -> str:
+        # Validate before creating a folder so a bad window never becomes a submission.
+        start, end = canonical_record_dates(record_date_start, record_date_end)
         now = datetime.now(HK)
         sub_id = now.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
         used: set[str] = set()
@@ -96,6 +163,9 @@ class Storage:
             "result_files": [],
             "admin_note": "",
         }
+        if start is not None and end is not None:
+            manifest["record_date_start"] = start
+            manifest["record_date_end"] = end
         (local / "manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -259,6 +329,11 @@ class Storage:
         out["admin_note"] = out.get("admin_note") or ""
         submitted = out.get("submitted_at") or ""
         out["submitted_display"] = self._format_time(submitted)
+        out["record_date_start"] = record_date_text(out.get("record_date_start"))
+        out["record_date_end"] = record_date_text(out.get("record_date_end"))
+        out["record_date_label"] = record_date_label(
+            out["record_date_start"], out["record_date_end"]
+        )
         return out
 
     def _format_time(self, value: str) -> str:

@@ -117,7 +117,7 @@ label {
   gap: 8px;
   font-weight: 700;
 }
-input[type="text"], input[type="password"], input[type="file"], select, textarea {
+input[type="text"], input[type="password"], input[type="file"], input[type="date"], select, textarea {
   width: 100%;
   min-height: 52px;
   border: 1px solid #e3d5cc;
@@ -130,6 +130,67 @@ input[type="text"], input[type="password"], input[type="file"], select, textarea
 }
 textarea { min-height: 96px; resize: vertical; }
 input[type="file"] { padding: 12px; background: #fffaf8; }
+input[type="date"]::-webkit-calendar-picker-indicator {
+  width: 1.4rem;
+  height: 1.4rem;
+  cursor: pointer;
+}
+.date-window {
+  margin: 0;
+  border: 1px solid #ead3dc;
+  border-radius: 18px;
+  padding: 14px 14px 16px;
+  background: linear-gradient(180deg, rgba(247, 220, 227, 0.55), rgba(229, 220, 244, 0.38));
+}
+.date-window legend {
+  padding: 0 8px;
+  font-weight: 750;
+  color: var(--rose-deep);
+}
+.date-window .hint { margin: 2px 0 12px; }
+.date-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.date-window label.chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 7.5rem;
+  min-height: 48px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid #e3d5cc;
+  background: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+.date-window label.chip:has(input:checked) {
+  background: var(--lavender);
+  border-color: #d5c6ea;
+  color: var(--lavender-deep);
+}
+.date-window .chip input {
+  width: 1.15rem;
+  height: 1.15rem;
+  margin: 0;
+  accent-color: var(--lavender-deep);
+}
+.date-window .day-fields,
+.date-window .range-fields {
+  display: none;
+  margin-top: 12px;
+}
+.date-window:has(input[name="record_mode"][value="day"]:checked) .day-fields {
+  display: grid;
+}
+.date-window:has(input[name="record_mode"][value="range"]:checked) .range-fields {
+  display: grid;
+  gap: 12px;
+}
 .btn {
   display: inline-flex;
   align-items: center;
@@ -182,6 +243,26 @@ input[type="file"] { padding: 12px; background: #fffaf8; }
 }
 .feed-title { font-weight: 750; }
 .feed-meta { color: var(--muted); font-size: 0.92rem; }
+.feed-date {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  min-height: 28px;
+  margin-top: 2px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--blush);
+  color: var(--rose-deep);
+  font-size: 0.86rem;
+  font-weight: 750;
+}
+.feed-date.is-empty {
+  background: transparent;
+  color: var(--muted);
+  font-weight: 650;
+  padding-left: 0;
+}
+.unset { color: var(--muted); font-weight: 650; }
 .tag {
   display: inline-block;
   border-radius: 999px;
@@ -224,4 +305,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .card { padding: 30px 28px; }
   .meta { grid-template-columns: 96px 1fr; }
   .meta dd { margin: 0; }
+  .date-window:has(input[name="record_mode"][value="range"]:checked) .range-fields {
+    grid-template-columns: 1fr 1fr;
+  }
 }

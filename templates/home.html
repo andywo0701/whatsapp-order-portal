@@ -9,9 +9,10 @@
 <section class="card">
   <p class="eyebrow">{{ role_label }} · {{ role_title }}</p>
   <h1>歡迎回來</h1>
-  <p class="muted">{{ user }}，把對話導出、圈好的圖片或聯絡人截圖交給我們就好。單檔上限 40MB，一次最多 80MB。</p>
+  <p class="muted">{{ user }}，把對話導出、圈好的圖片或聯絡人截圖交給我們就好。可以選擇這些紀錄屬於哪一天。單檔上限 40MB，一次最多 80MB。</p>
   <form method="post" action="/submit" enctype="multipart/form-data" class="stack">
     <input type="hidden" name="csrf" value="{{ csrf }}">
+    {% set mode = form_mode|default('', true) %}
     <label>類型
       <select name="kind" required>
         {% for k in kinds %}
@@ -19,6 +20,37 @@
         {% endfor %}
       </select>
     </label>
+    <fieldset class="date-window">
+      <legend>WhatsApp 紀錄日期</legend>
+      <p class="hint" id="record-date-hint">可選，以香港日曆計算。留空就會處理檔案裡找到的所有日期。</p>
+      <div class="date-modes">
+        <label class="chip">
+          <input type="radio" name="record_mode" value=""{% if mode != 'day' and mode != 'range' %} checked{% endif %}>
+          不指定
+        </label>
+        <label class="chip">
+          <input type="radio" name="record_mode" value="day"{% if mode == 'day' %} checked{% endif %}>
+          單日
+        </label>
+        <label class="chip">
+          <input type="radio" name="record_mode" value="range"{% if mode == 'range' %} checked{% endif %}>
+          日期範圍
+        </label>
+      </div>
+      <div class="day-fields">
+        <label>日期
+          <input type="date" name="record_day" value="{{ form_day|default('', true) }}" aria-describedby="record-date-hint">
+        </label>
+      </div>
+      <div class="range-fields">
+        <label>開始日期
+          <input type="date" name="record_date_start" value="{{ form_start|default('', true) }}" aria-describedby="record-date-hint">
+        </label>
+        <label>結束日期
+          <input type="date" name="record_date_end" value="{{ form_end|default('', true) }}" aria-describedby="record-date-hint">
+        </label>
+      </div>
+    </fieldset>
     <label>備註（可選）
       <textarea name="note" rows="3" maxlength="2000" placeholder="例如要補充的事項，請不要在這裡貼上不必要的個人資料"></textarea>
     </label>
@@ -41,6 +73,7 @@
           <span class="tag tag-{{ item.status }}">{{ item.status_label }}</span>
         </span>
         <span class="feed-meta">{{ item.submitted_display }} · {{ item.files|length }} 個檔案{% if item.result_files %} · 結果 {{ item.result_files|length }} 個{% endif %}</span>
+        <span class="feed-date{% if not item.record_date_label %} is-empty{% endif %}">{% if item.record_date_label %}紀錄 {{ item.record_date_label }}{% else %}未指定日期{% endif %}</span>
       </a>
     </li>
     {% endfor %}
