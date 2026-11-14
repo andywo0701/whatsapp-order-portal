@@ -138,5 +138,39 @@ def publish_roster(roster_json: Path) -> None:
     print("Published customers/roster.json")
 
 
+def validate_catalog_payload(data: object) -> None:
+    """Refuse a catalog publish that would make the portal invent a price."""
+    if not isinstance(data, dict) or not isinstance(data.get("products"), list):
+        raise ValueError("catalog json must be an object with a products list")
+    for row in data["products"]:
+        if not isinstance(row, dict):
+            raise ValueError("each product must be an object")
+        for key in ("name", "price", "image", "note"):
+            if key in row and row[key] is not None and not isinstance(row[key], str):
+                raise ValueError(f"{key} must be a string")
+
+
+def publish_catalog(catalog_json: Path) -> None:
+    """Upload catalog/catalog.json. The portal merges it and does not OCR prices.
+
+    name and price must be strings when present, so a price keeps the characters
+    the scanner actually saw. A blank price does not erase a price already on
+    the portal, and a deleted product is not restored.
+    """
+    path = Path(catalog_json)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    validate_catalog_payload(data)
+    tok = token()
+    upload_file(
+        path_or_fileobj=path.read_bytes(),
+        path_in_repo="catalog/catalog.json",
+        repo_id=DATASET_ID,
+        repo_type="dataset",
+        token=tok,
+        commit_message="Publish product catalog",
+    )
+    print("Published catalog/catalog.json")
+
+
 if __name__ == "__main__":
     main()

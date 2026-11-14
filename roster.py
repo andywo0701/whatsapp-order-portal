@@ -9,6 +9,7 @@ import secrets
 import zipfile
 from datetime import datetime
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
 from zoneinfo import ZoneInfo
@@ -19,10 +20,19 @@ HK = ZoneInfo("Asia/Hong_Kong")
 
 PURPOSE_ORDERS = "orders"
 PURPOSE_CUSTOMERS = "customers"
+PURPOSE_CATALOG = "catalog"
+PURPOSE_AUTO = "auto"
 PURPOSE_LABELS = {
     PURPOSE_ORDERS: "落單資料",
     PURPOSE_CUSTOMERS: "客戶資料",
+    PURPOSE_CATALOG: "貨品清單",
 }
+# Filename tokens only. The portal never opens the file to decide this.
+_CATALOG_EXTS = {".xlsx", ".xls", ".csv", ".doc", ".docx"}
+_CATALOG_NAME = re.compile(
+    r"貨品|商品|產品|價目|價錢|價格|catalog|catalogue|products?|prices?|pricelist|sku",
+    re.IGNORECASE,
+)
 
 SOURCE_CONVERSATION = "conversation"
 SOURCE_SCREENSHOT = "contact_screenshot"
@@ -95,6 +105,37 @@ def purpose_of(value: object) -> str:
     if isinstance(value, str) and value.strip() in PURPOSE_LABELS:
         return value.strip()
     return PURPOSE_ORDERS
+
+
+def detect_purpose(chosen: object, filenames: list[str]) -> str:
+    """Pick orders, customers, or catalog from the chip or from filenames.
+
+    Blank and 「自動分辨」 look at the file name and extension only.
+    Chat .zip and .txt stay 落單資料. A spreadsheet or Word file whose name
+    looks like a product list becomes 貨品清單. Anything else stays 落單資料
+    unless staff explicitly picked 客戶資料 or 貨品清單. File bytes are ignored.
+    """
+    if chosen is None:
+        text = ""
+    elif isinstance(chosen, str):
+        text = chosen.strip()
+    else:
+        raise ValueError("請選擇上載用途。")
+    if text in PURPOSE_LABELS:
+        return text
+    if text not in {"", PURPOSE_AUTO}:
+        raise ValueError("請選擇上載用途。")
+    for name in filenames:
+        if isinstance(name, str) and _catalog_filename(name):
+            return PURPOSE_CATALOG
+    return PURPOSE_ORDERS
+
+
+def _catalog_filename(name: str) -> bool:
+    base = Path(name).name
+    if Path(base).suffix.lower() not in _CATALOG_EXTS:
+        return False
+    return bool(_CATALOG_NAME.search(Path(base).stem))
 
 
 def empty_document() -> dict[str, Any]:
@@ -480,7 +521,11 @@ def roster_xlsx_bytes(document: dict[str, Any]) -> bytes:
                 row["note"],
             ]
         )
-    return _xlsx(sheet_rows)
+    return xlsx_bytes(sheet_rows, "顧客名冊")
+
+
+def xlsx_bytes(rows: list[list[str]], sheet_name: str = "顧客名冊") -> bytes:
+    return _xlsx(rows, sheet_name)
 
 
 def canonical_source(value: object) -> str:
@@ -947,7 +992,7 @@ def _format_time(value: str) -> str:
     return parsed.astimezone(HK).strftime("%Y-%m-%d %H:%M") + " HKT"
 
 
-def _xlsx(rows: list[list[str]]) -> bytes:
+def _xlsx(rows: list[list[str]], sheet_name: str = "顧客名冊") -> bytes:
     sheet = [
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
         '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">',
@@ -975,9 +1020,10 @@ def _xlsx(rows: list[list[str]]) -> bytes:
   </cellXfs>
 </styleSheet>
 """
-    workbook = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    safe_sheet = escape(sheet_name)
+    workbook = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-  <sheets><sheet name="顧客名冊" sheetId="1" r:id="rId1"/></sheets>
+  <sheets><sheet name="{safe_sheet}" sheetId="1" r:id="rId1"/></sheets>
 </workbook>
 """
     buffer = BytesIO()

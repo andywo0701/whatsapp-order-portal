@@ -5,6 +5,10 @@
 {% if notice == "submitted" %}
 <p class="alert ok">已收到你的上載，處理好的 Excel 會放回這裡。</p>
 {% endif %}
+{% if notice == "scan-sent" %}
+<p class="alert ok">已發出掃描要求，做好會把 Excel 放回這裡。</p>
+{% endif %}
+{% if scan_note %}<p class="alert soft" role="status">{{ scan_note }}</p>{% endif %}
 {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
 <section class="card">
   <p class="eyebrow">提交詳情</p>
@@ -41,9 +45,24 @@
   {% if item.purpose == "customers" %}
   <p class="muted quiet">結果還沒準備好。掃描程式處理完這批客戶資料後，顧客名冊會更新。這個網站不會從圖片讀取姓名或電話。</p>
   <p class="back"><a href="/customers">查看顧客名冊</a></p>
+  {% elif item.purpose == "catalog" %}
+  <p class="muted quiet">結果還沒準備好。掃描程式處理完這份貨品清單後，價錢會出現在貨品清單頁。這個網站不會從檔案讀取或編造價錢。</p>
+  <p class="back"><a href="/catalog">查看貨品清單</a></p>
   {% else %}
   <p class="muted quiet">結果還沒準備好。處理完成後，落單 Excel 會出現在這裡供下載。</p>
   {% endif %}
+  {% endif %}
+
+  {% if not item.deleted and item.status == "pending" %}
+  <div class="scan-panel">
+    <h2>立即掃描</h2>
+    <p class="muted">按下後會請掃描程式處理這筆待處理的上載。如果還沒接上，可以在 Grok Bot 對話裡請它掃描。</p>
+    <form method="post" action="/scan">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="submission_id" value="{{ item.id }}">
+      <button type="submit" class="btn scan">立即掃描</button>
+    </form>
+  </div>
   {% endif %}
 
   {% if item.deleted %}

@@ -215,6 +215,11 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   color: var(--ink);
   border: 1px solid var(--line);
 }
+.btn.scan {
+  width: auto;
+  background: var(--lavender);
+  color: var(--lavender-deep);
+}
 .top-actions .btn { width: auto; min-height: 44px; }
 .alert {
   background: var(--danger-bg);
@@ -224,6 +229,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   margin: 0 0 16px;
 }
 .alert.ok { background: var(--ok-bg); color: var(--ok); }
+.alert.soft { background: #f3eef8; color: var(--lavender-deep); }
 .feed { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
 .feed-link {
   display: grid;
@@ -283,6 +289,22 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .tag-pending { background: var(--pending-bg); color: var(--pending); }
 .tag-purpose-orders { background: var(--blush); color: var(--rose-deep); }
 .tag-purpose-customers { background: var(--lavender); color: var(--lavender-deep); }
+.tag-purpose-catalog { background: #fde7d2; color: #8a4e32; }
+.price-missing { color: var(--warn); font-weight: 750; }
+.scan-panel {
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--line);
+}
+.product-shot {
+  display: block;
+  width: min(100%, 280px);
+  height: auto;
+  margin-top: 8px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
 .phone-missing { color: var(--warn); font-weight: 750; }
 .roster-filters { margin-top: 14px; }
 a.chip {

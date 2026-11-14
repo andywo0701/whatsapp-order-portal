@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}刪除貨品｜貨品清單{% endblock %}
+{% block content %}
+<p class="crumb"><a href="/catalog/{{ product.id }}">返回這項貨品</a></p>
+{% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+<section class="card">
+  <p class="eyebrow">超級管理員 · Super Admin</p>
+  <h1>{{ catalog_delete_confirm }}</h1>
+  <p class="muted">確認之後，這項貨品會從清單移除。之後的掃描如果再用同一個編號或同一個名稱發布，也不會把這筆加回來。已上載的檔案不會被清掉。</p>
+  <dl class="meta">
+    <dt>貨品名稱</dt><dd>{{ product.name }}</dd>
+    <dt>價錢</dt><dd>{% if product.price_missing %}<span class="price-missing">尚缺</span>{% else %}{{ product.price_display }}{% endif %}</dd>
+  </dl>
+  <div class="confirm-actions">
+    <form method="post" action="/catalog/{{ product.id }}/delete">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit" class="btn danger" name="confirm" value="{{ catalog_delete_confirm }}">確定刪除</button>
+    </form>
+    <a class="btn ghost" href="/catalog/{{ product.id }}">取消</a>
+  </div>
+</section>
+{% endblock %}

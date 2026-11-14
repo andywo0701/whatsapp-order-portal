@@ -13,6 +13,17 @@ from zoneinfo import ZoneInfo
 from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
 from huggingface_hub.errors import EntryNotFoundError, RepositoryNotFoundError
 
+from catalog import (
+    CATALOG_JSON_PATH,
+    CATALOG_XLSX_PATH,
+    apply_delete as apply_catalog_delete,
+    catalog_xlsx_bytes,
+    clean_image,
+    empty_document as empty_catalog,
+    image_is_displayable,
+    merge_catalogs,
+    parse_catalog_text,
+)
 from roster import (
     PURPOSE_LABELS,
     ROSTER_JSON_PATH,
@@ -33,6 +44,18 @@ SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 SAFE_NAME = re.compile(r"^[A-Za-z0-9._\u4e00-\u9fff\-()+ ]+$")
 ISO_DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 ACCOUNTS_REPO_PATH = "users/accounts.json"
+KIND_PENDING = "待判斷"
+# Posted by older forms, or later by the scanning bot. The upload form no longer asks.
+LEGACY_KINDS = {"新單", "改單", "取消", "已改", "已取消", "聯絡人截圖", "其他", KIND_PENDING}
+
+
+def canonical_kind(value: object) -> str:
+    """Empty or unknown kinds stay 待判斷. The portal does not decide 新單 or 改單."""
+    if isinstance(value, str):
+        text = value.strip()
+        if text in LEGACY_KINDS:
+            return text
+    return KIND_PENDING
 
 
 def parse_iso_date(value: object) -> date | None:
@@ -162,6 +185,7 @@ class Storage:
         # Validate before creating a folder so a bad window never becomes a submission.
         start, end = canonical_record_dates(record_date_start, record_date_end)
         chosen_purpose = canonical_purpose(purpose)
+        chosen_kind = canonical_kind(kind)
         now = datetime.now(HK)
         sub_id = now.strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
         used: set[str] = set()
@@ -182,7 +206,7 @@ class Storage:
             "id": sub_id,
             "submitted_at": now.isoformat(),
             "submitter": user,
-            "kind": kind,
+            "kind": chosen_kind,
             "note": note,
             "files": stored_names,
             "status": "pending",
@@ -399,6 +423,11 @@ class Storage:
         out["deleted_display"] = self._format_time(out["deleted_at"]) if deleted and out["deleted_at"] else ""
         out["files"] = [Path(str(n)).name for n in (out.get("files") or []) if n]
         out["result_files"] = [Path(str(n)).name for n in (out.get("result_files") or []) if n]
+        raw_kind = out.get("kind")
+        if isinstance(raw_kind, str) and raw_kind.strip():
+            out["kind"] = raw_kind.strip()[:40]
+        else:
+            out["kind"] = KIND_PENDING
         out["note"] = out.get("note") or ""
         out["admin_note"] = out.get("admin_note") or ""
         submitted = out.get("submitted_at") or ""
@@ -468,6 +497,88 @@ class Storage:
     def roster_workbook(self) -> bytes:
         return roster_xlsx_bytes(self.get_roster_document())
 
+    def get_catalog_document(self) -> dict[str, Any]:
+        """Catalog for the signed-in page. A missing catalog/ folder is an empty catalog."""
+        local = self._read_local_catalog()
+        if not self.is_ready():
+            return local
+        remote = self._download_catalog()
+        if remote is None:
+            return local
+        return merge_catalogs(local, remote)
+
+    def save_catalog_document(self, document: dict[str, Any], message: str) -> None:
+        """Publish to the dataset first. A failed upload leaves the local catalog unchanged."""
+        payload = json.dumps(document, ensure_ascii=False, indent=2).encode("utf-8")
+        workbook = catalog_xlsx_bytes(document)
+        if self.is_ready():
+            self.ensure_repo()
+            self._api_client().create_commit(
+                repo_id=self.repo_id,
+                repo_type="dataset",
+                operations=[
+                    CommitOperationAdd(path_in_repo=CATALOG_JSON_PATH, path_or_fileobj=payload),
+                    CommitOperationAdd(path_in_repo=CATALOG_XLSX_PATH, path_or_fileobj=workbook),
+                ],
+                commit_message=message,
+            )
+        self._write_local_catalog(payload, workbook)
+
+    def delete_catalog_product(self, actor: str, product_id: str) -> dict[str, Any]:
+        updated = apply_catalog_delete(self.get_catalog_document(), product_id, actor)
+        self.save_catalog_document(updated, f"Delete catalog product {product_id}")
+        return updated
+
+    def catalog_workbook(self) -> bytes:
+        return catalog_xlsx_bytes(self.get_catalog_document())
+
+    def resolve_catalog_image(self, product: dict[str, Any]) -> Path | None:
+        """Local catalog image, or the same file name inside a source submission."""
+        name = clean_image(product.get("image"))
+        if not name or not image_is_displayable(name):
+            return None
+        local = self.local_root / "catalog" / "images" / name
+        found = self._file_under_root(local)
+        if found is not None:
+            return found
+        if self.is_ready():
+            try:
+                got = hf_hub_download(
+                    repo_id=self.repo_id,
+                    repo_type="dataset",
+                    filename=f"catalog/images/{name}",
+                    token=self.token,
+                )
+                local.parent.mkdir(parents=True, exist_ok=True)
+                self._replace_private(local, Path(got).read_bytes())
+            except Exception:
+                pass
+            found = self._file_under_root(local)
+            if found is not None:
+                return found
+        for sub_id in product.get("submission_ids") or []:
+            if not isinstance(sub_id, str):
+                continue
+            path = self.local_file_path(sub_id, "files", name)
+            if path is None:
+                continue
+            found = self._file_under_root(path)
+            if found is not None and image_is_displayable(found.name):
+                return found
+        return None
+
+    def _file_under_root(self, path: Path) -> Path | None:
+        if not path.is_file():
+            return None
+        try:
+            resolved = path.resolve()
+            root = self.local_root.resolve()
+        except OSError:
+            return None
+        if resolved != root and root not in resolved.parents:
+            return None
+        return resolved
+
     def _roster_json_path(self) -> Path:
         return self.local_root / "customers" / "roster.json"
 
@@ -503,6 +614,42 @@ class Storage:
         folder.mkdir(parents=True, exist_ok=True)
         self._replace_private(folder / "roster.json", payload)
         self._replace_private(folder / "roster.xlsx", workbook)
+
+    def _catalog_json_path(self) -> Path:
+        return self.local_root / "catalog" / "catalog.json"
+
+    def _read_local_catalog(self) -> dict[str, Any]:
+        path = self._catalog_json_path()
+        if not path.is_file():
+            return empty_catalog()
+        try:
+            parsed = parse_catalog_text(path.read_text(encoding="utf-8"))
+        except OSError:
+            return empty_catalog()
+        return parsed if parsed is not None else empty_catalog()
+
+    def _download_catalog(self) -> dict[str, Any] | None:
+        """Empty document when catalog/catalog.json is absent. None when the hub cannot be read."""
+        try:
+            downloaded = hf_hub_download(
+                repo_id=self.repo_id,
+                repo_type="dataset",
+                filename=CATALOG_JSON_PATH,
+                token=self.token,
+                force_download=True,
+            )
+            parsed = parse_catalog_text(Path(downloaded).read_text(encoding="utf-8"))
+        except (EntryNotFoundError, RepositoryNotFoundError):
+            return empty_catalog()
+        except Exception:
+            return None
+        return parsed
+
+    def _write_local_catalog(self, payload: bytes, workbook: bytes) -> None:
+        folder = self.local_root / "catalog"
+        folder.mkdir(parents=True, exist_ok=True)
+        self._replace_private(folder / "catalog.json", payload)
+        self._replace_private(folder / "catalog.xlsx", workbook)
 
     def _replace_private(self, path: Path, payload: bytes) -> None:
         temporary = path.with_suffix(path.suffix + ".tmp")

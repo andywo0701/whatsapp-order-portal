@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}{% if product %}{{ product.name }}｜貨品清單{% else %}找不到貨品｜貨品清單{% endif %}{% endblock %}
+{% block content %}
+<p class="crumb"><a href="/catalog">返回貨品清單</a></p>
+{% if notice %}<p class="alert ok">{{ notice }}</p>{% endif %}
+{% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+<section class="card">
+  {% if not product %}
+  <p class="eyebrow">貨品清單</p>
+  <h1>找不到這項貨品</h1>
+  <p class="muted">編號可能不對，或這項貨品已經從清單移除。</p>
+  {% else %}
+  <p class="eyebrow">貨品</p>
+  <h1>{{ product.name }}</h1>
+  <dl class="meta">
+    <dt>貨品名稱</dt><dd>{{ product.name }}</dd>
+    <dt>價錢</dt><dd>{% if product.price_missing %}<span class="price-missing">尚缺</span>{% else %}{{ product.price_display }}{% endif %}</dd>
+    <dt>圖片</dt><dd>{% if product.image %}{{ product.image }}{% if product.image_available %}<img class="product-shot" src="/catalog/{{ product.id }}/image" alt="{{ product.name }}">{% endif %}{% else %}<span class="unset">沒有圖片</span>{% endif %}</dd>
+    <dt>備註</dt><dd>{% if product.note %}{{ product.note }}{% else %}<span class="unset">沒有備註</span>{% endif %}</dd>
+    <dt>最後更新日期</dt><dd>{{ product.updated_display }}</dd>
+  </dl>
+  {% if related %}
+  <h2>相關貨品清單</h2>
+  <ul class="files">
+    {% for item in related %}
+    <li><a href="/submission/{{ item.id }}">{{ item.purpose_label }} · {{ item.submitted_display }}</a></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if role == "super_admin" %}
+  <div class="confirm-actions roster-actions">
+    <a class="btn quiet-danger" href="/catalog/{{ product.id }}/delete">刪除此貨品</a>
+  </div>
+  {% endif %}
+  {% endif %}
+</section>
+{% endblock %}
