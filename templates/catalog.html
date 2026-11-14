@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}貨品清單｜落單上載{% endblock %}
+{% block content %}
+<p class="crumb"><a href="/">返回上載</a></p>
+{% if notice %}<p class="alert ok">{{ notice }}</p>{% endif %}
+{% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+
+<section class="card">
+  <p class="eyebrow">貨品清單</p>
+  <h1>貨品與價錢</h1>
+  <p class="muted">這裡只顯示掃描程式已經發布的清單。價錢會保持原來的寫法；還沒有價錢就顯示尚缺。這個網站不會從 Excel、Word 或圖片讀取或編造價錢。</p>
+  <form method="get" action="/catalog" class="stack roster-search">
+    <label>搜尋貨品、價錢或備註
+      <input type="search" name="q" value="{{ query }}" placeholder="輸入貨品名稱，或價錢的一部分" autocomplete="off">
+    </label>
+    <button type="submit" class="btn primary">搜尋</button>
+  </form>
+  <p class="roster-tools">
+    <a class="btn ghost" href="/catalog/catalog.xlsx">下載貨品清單.xlsx</a>
+    <span class="muted quiet">{% if rows|length != total %}顯示 {{ rows|length }} 項 / {% endif %}共 {{ total }} 項</span>
+  </p>
+</section>
+
+<section class="card">
+  <h2>清單</h2>
+  {% if total == 0 %}
+  <p class="muted quiet">還沒有貨品清單。請在上載頁選擇「貨品清單」，上載 Excel、Word 或貨品相片。掃描完成並發布後，價錢會出現在這裡。這個網站不會從檔案讀取或編造價錢。</p>
+  <p class="back"><a class="btn ghost" href="/?purpose=catalog#upload-purpose">去上載貨品清單</a></p>
+  {% elif rows %}
+  <ul class="feed">
+    {% for row in rows %}
+    <li>
+      <a class="feed-link" href="/catalog/{{ row.id }}">
+        <span class="feed-top">
+          <span class="feed-title">{{ row.name }}</span>
+          {% if row.image %}<span class="tag tag-purpose-catalog">有圖片</span>{% endif %}
+        </span>
+        <span class="feed-meta">價錢 {% if row.price_missing %}<span class="price-missing">尚缺</span>{% else %}{{ row.price_display }}{% endif %}</span>
+        <span class="feed-date{% if not row.note %} is-empty{% endif %}">{% if row.note %}{{ row.note }} · {% endif %}{{ row.updated_display }}</span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted quiet">沒有符合的貨品。</p>
+  {% endif %}
+</section>
+{% endblock %}

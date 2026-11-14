@@ -24,7 +24,16 @@ from auth import (
     change_own_password,
     reset_admin_password,
 )
+from catalog import (
+    CATALOG_DELETE_CONFIRM,
+    CatalogError,
+    CatalogNotFound,
+    filter_products,
+    present_product,
+)
 from roster import (
+    PURPOSE_AUTO,
+    PURPOSE_CATALOG,
     PURPOSE_CUSTOMERS,
     PURPOSE_ORDERS,
     ROSTER_CONFIRM,
@@ -32,9 +41,11 @@ from roster import (
     ROSTER_EDIT_CONFIRM,
     RosterError,
     RosterNotFound,
+    detect_purpose,
     filter_customers,
     present_customer,
 )
+from scan import mark_scan, post_scan, scan_is_limited
 from storage import Storage, parse_iso_date, record_date_text
 
 try:
@@ -51,10 +62,14 @@ ALLOWED_EXT = {
 MAX_FILES = 40
 MAX_FILE_BYTES = 40 * 1024 * 1024
 MAX_TOTAL_BYTES = 80 * 1024 * 1024
-KINDS = ["新單", "改單", "取消", "聯絡人截圖", "其他"]
 DELETE_CONFIRM = "確定刪除此提交？"
 LOGIN_WINDOW = 15 * 60
 LOGIN_MAX_TRIES = 8
+PURPOSE_CHOICES = {PURPOSE_AUTO, PURPOSE_ORDERS, PURPOSE_CUSTOMERS, PURPOSE_CATALOG}
+SCAN_SENT = "已發出掃描要求，做好會把 Excel 放回這裡。"
+SCAN_OFFLINE = "即時掃描還沒接上。可以在 Grok Bot 對話裡請它掃描。"
+SCAN_FAILED = "暫時無法發出掃描要求，請稍後再試，或在 Grok Bot 對話裡請它掃描。"
+SCAN_LIMITED = "掃描要求太頻密，請稍候再按。"
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 app.add_middleware(
@@ -140,9 +155,15 @@ def _ctx(request: Request, **extra: Any) -> dict[str, Any]:
         "role_label": ROLE_LABELS.get(role or "", ""),
         "role_title": ROLE_TITLES.get(role or "", ""),
         "csrf": _csrf_token(request),
-        "kinds": KINDS,
         **extra,
     }
+
+
+def _form_purpose(value: str | None) -> str:
+    text = (value or "").strip()
+    if text in PURPOSE_CHOICES:
+        return text
+    return PURPOSE_AUTO
 
 
 def parse_record_dates(
@@ -267,7 +288,8 @@ def _home_response(
     form_day: str = "",
     form_start: str = "",
     form_end: str = "",
-    form_purpose: str = PURPOSE_ORDERS,
+    form_purpose: str = PURPOSE_AUTO,
+    scan_note: str | None = None,
 ) -> Response:
     return templates.TemplateResponse(
         request,
@@ -277,11 +299,12 @@ def _home_response(
             items=storage.list_submissions(),
             error=error,
             notice=notice,
+            scan_note=scan_note,
             form_mode=form_mode if form_mode in {"", "day", "range"} else "",
             form_day=_echo_date(form_day),
             form_start=_echo_date(form_start),
             form_end=_echo_date(form_end),
-            form_purpose=form_purpose if form_purpose in {PURPOSE_ORDERS, PURPOSE_CUSTOMERS} else PURPOSE_ORDERS,
+            form_purpose=_form_purpose(form_purpose),
         ),
         status_code=status_code,
     )
@@ -292,12 +315,11 @@ def home(request: Request) -> Response:
     user = _current_user(request)
     if not user:
         return RedirectResponse("/login", status_code=303)
-    requested = (request.query_params.get("purpose") or "").strip()
     return _home_response(
         request,
         error=None,
         notice=request.query_params.get("notice"),
-        form_purpose=requested if requested in {PURPOSE_ORDERS, PURPOSE_CUSTOMERS} else PURPOSE_ORDERS,
+        form_purpose=_form_purpose(request.query_params.get("purpose")),
     )
 
 
@@ -318,8 +340,8 @@ async def submit(
     if not user:
         return RedirectResponse("/login", status_code=303)
     form_mode = (record_mode or "").strip()
-    form_purpose = (purpose or "").strip()
-    echoed_purpose = form_purpose if form_purpose in {PURPOSE_ORDERS, PURPOSE_CUSTOMERS} else PURPOSE_ORDERS
+    posted_purpose = (purpose or "").strip()
+    echoed_purpose = posted_purpose if posted_purpose in PURPOSE_CHOICES else PURPOSE_AUTO
     if not _valid_csrf(request, csrf):
         return _home_response(
             request,
@@ -332,10 +354,8 @@ async def submit(
             form_end=record_date_end,
             form_purpose=echoed_purpose,
         )
-    if kind not in KINDS:
-        kind = "其他"
     note = (note or "").strip()[:2000]
-    if form_purpose not in {"", PURPOSE_ORDERS, PURPOSE_CUSTOMERS}:
+    if posted_purpose not in {"", *PURPOSE_CHOICES}:
         return _home_response(
             request,
             error="請選擇上載用途。",
@@ -345,7 +365,7 @@ async def submit(
             form_day=record_day,
             form_start=record_date_start,
             form_end=record_date_end,
-            form_purpose=PURPOSE_ORDERS,
+            form_purpose=PURPOSE_AUTO,
         )
     try:
         record_start, record_end = parse_record_dates(
@@ -400,6 +420,20 @@ async def submit(
             form_purpose=echoed_purpose,
         )
     try:
+        chosen_purpose = detect_purpose(echoed_purpose, [name for name, _payload in saved])
+    except ValueError as exc:
+        return _home_response(
+            request,
+            error=str(exc),
+            notice=None,
+            status_code=400,
+            form_mode=form_mode,
+            form_day=record_day,
+            form_start=record_date_start,
+            form_end=record_date_end,
+            form_purpose=echoed_purpose,
+        )
+    try:
         sub_id = storage.create_submission(
             user=user,
             kind=kind,
@@ -407,7 +441,7 @@ async def submit(
             files=saved,
             record_date_start=record_start,
             record_date_end=record_end,
-            purpose=echoed_purpose,
+            purpose=chosen_purpose,
         )
     except Exception:
         return _home_response(
@@ -439,7 +473,7 @@ def submission_page(request: Request, sub_id: str) -> Response:
     return templates.TemplateResponse(
         request,
         "submission.html",
-        _ctx(request, item=item, notice=request.query_params.get("notice")),
+        _ctx(request, item=item, notice=request.query_params.get("notice"), scan_note=None),
     )
 
 
@@ -465,7 +499,7 @@ def _delete_forbidden(request: Request, item: dict[str, Any] | None) -> Response
     return templates.TemplateResponse(
         request,
         "submission.html",
-        _ctx(request, item=item, notice=None, error="沒有權限。"),
+        _ctx(request, item=item, notice=None, error="沒有權限。", scan_note=None),
         status_code=403,
     )
 
@@ -996,6 +1030,265 @@ async def customer_delete_submit(
             template="customer_delete.html",
         )
     return RedirectResponse("/customers?notice=deleted", status_code=303)
+
+
+def _scan_page(
+    request: Request,
+    item: dict[str, Any] | None,
+    *,
+    error: str | None = None,
+    scan_note: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    if item:
+        return templates.TemplateResponse(
+            request,
+            "submission.html",
+            _ctx(request, item=item, notice=None, error=error, scan_note=scan_note),
+            status_code=status_code,
+        )
+    return _home_response(
+        request,
+        error=error,
+        notice=None,
+        scan_note=scan_note,
+        status_code=status_code,
+    )
+
+
+@app.post("/scan")
+async def scan_submit(
+    request: Request,
+    csrf: str = Form(""),
+    submission_id: str = Form(""),
+) -> Response:
+    user = _current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    sub_id = (submission_id or "").strip()
+    item = None
+    if re.fullmatch(r"[A-Za-z0-9_-]{6,64}", sub_id):
+        item = storage.get_submission(sub_id)
+    else:
+        sub_id = ""
+    if item is None:
+        sub_id = ""
+    if not _valid_csrf(request, csrf):
+        return _scan_page(request, item, error="請重新整理後再試。", status_code=400)
+    if scan_is_limited(user):
+        return _scan_page(request, item, scan_note=SCAN_LIMITED, status_code=429)
+    mark_scan(user)
+    try:
+        result = post_scan({"requested_by": user, "submission_id": sub_id})
+    except Exception:
+        result = "failed"
+    if result == "sent":
+        if item:
+            return RedirectResponse(f"/submission/{quote(item['id'])}?notice=scan-sent", status_code=303)
+        return RedirectResponse("/?notice=scan-sent", status_code=303)
+    if result == "unconfigured":
+        return _scan_page(request, item, scan_note=SCAN_OFFLINE, status_code=200)
+    return _scan_page(request, item, scan_note=SCAN_FAILED, status_code=200)
+
+
+def _catalog_notice(code: str | None) -> str | None:
+    return {"deleted": "已刪除此貨品。"}.get(code or "")
+
+
+def _catalog_product(product_id: str) -> dict[str, Any] | None:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{6,64}", product_id):
+        return None
+    for row in storage.get_catalog_document().get("products") or []:
+        if row.get("id") == product_id:
+            return row
+    return None
+
+
+def _catalog_view(row: dict[str, Any] | None, *, with_image: bool = False) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    shown = present_product(row)
+    shown["image_available"] = bool(
+        with_image and shown["image"] and storage.resolve_catalog_image(row) is not None
+    )
+    return shown
+
+
+def _catalog_related(row: dict[str, Any]) -> list[dict[str, Any]]:
+    found = []
+    for sub_id in row.get("submission_ids") or []:
+        item = storage.get_submission(str(sub_id))
+        if item:
+            found.append(item)
+    return found
+
+
+def _catalog_page(
+    request: Request,
+    *,
+    error: str | None = None,
+    status_code: int = 200,
+    query: str = "",
+) -> Response:
+    document = storage.get_catalog_document()
+    products = list(document.get("products") or [])
+    shown = filter_products(products, query)
+    return templates.TemplateResponse(
+        request,
+        "catalog.html",
+        _ctx(
+            request,
+            error=error,
+            notice=_catalog_notice(request.query_params.get("notice")),
+            rows=[present_product(row) for row in shown],
+            total=len(products),
+            query=query,
+        ),
+        status_code=status_code,
+    )
+
+
+def _product_page(
+    request: Request,
+    product: dict[str, Any] | None,
+    *,
+    error: str | None = None,
+    status_code: int = 200,
+    template: str = "product.html",
+) -> Response:
+    source = product
+    shown = _catalog_view(product, with_image=template == "product.html") if product else None
+    return templates.TemplateResponse(
+        request,
+        template,
+        _ctx(
+            request,
+            product=shown,
+            error=error,
+            notice=_catalog_notice(request.query_params.get("notice")),
+            related=_catalog_related(source) if source else [],
+            catalog_delete_confirm=CATALOG_DELETE_CONFIRM,
+        ),
+        status_code=status_code,
+    )
+
+
+def _catalog_forbidden(request: Request, product: dict[str, Any] | None) -> Response:
+    return _product_page(request, product, error="沒有權限。", status_code=403)
+
+
+@app.get("/catalog", response_class=HTMLResponse)
+def catalog_page(request: Request) -> Response:
+    if not _current_user(request):
+        return RedirectResponse("/login", status_code=303)
+    return _catalog_page(request, query=(request.query_params.get("q") or "").strip())
+
+
+@app.get("/catalog/catalog.xlsx")
+def download_catalog(request: Request) -> Response:
+    if not _current_user(request):
+        return RedirectResponse("/login", status_code=303)
+    workbook = storage.catalog_workbook()
+    filename = quote("貨品清單.xlsx")
+    return Response(
+        content=workbook,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename=\"catalog.xlsx\"; filename*=UTF-8''{filename}"
+        },
+    )
+
+
+@app.get("/catalog/{product_id}", response_class=HTMLResponse)
+def product_page(request: Request, product_id: str) -> Response:
+    if not _current_user(request):
+        return RedirectResponse("/login", status_code=303)
+    product = _catalog_product(product_id)
+    if not product:
+        return _product_page(request, None, status_code=404)
+    return _product_page(request, product)
+
+
+@app.get("/catalog/{product_id}/image")
+def catalog_image(request: Request, product_id: str) -> Response:
+    if not _current_user(request):
+        return RedirectResponse("/login", status_code=303)
+    product = _catalog_product(product_id)
+    if not product:
+        return Response("找不到圖片。", status_code=404, media_type="text/plain; charset=utf-8")
+    path = storage.resolve_catalog_image(product)
+    if path is None:
+        return Response("找不到圖片。", status_code=404, media_type="text/plain; charset=utf-8")
+    return FileResponse(path, filename=path.name, content_disposition_type="inline")
+
+
+@app.get("/catalog/{product_id}/delete", response_class=HTMLResponse)
+def catalog_delete_page(request: Request, product_id: str) -> Response:
+    user = _current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    product = _catalog_product(product_id)
+    if STAFF.get(user) != "super_admin":
+        return _catalog_forbidden(request, product)
+    if not product:
+        return _product_page(request, None, status_code=404)
+    return _product_page(request, product, template="product_delete.html")
+
+
+@app.post("/catalog/{product_id}/delete")
+async def catalog_delete_submit(
+    request: Request,
+    product_id: str,
+    csrf: str = Form(""),
+    confirm: str = Form(""),
+) -> Response:
+    user = _current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    product = _catalog_product(product_id)
+    if STAFF.get(user) != "super_admin":
+        return _catalog_forbidden(request, product)
+    if not product:
+        return _product_page(request, None, status_code=404)
+    if not _valid_csrf(request, csrf):
+        return _product_page(
+            request,
+            product,
+            error="請重新整理後再試。",
+            status_code=400,
+            template="product_delete.html",
+        )
+    if confirm != CATALOG_DELETE_CONFIRM:
+        return _product_page(
+            request,
+            product,
+            error="請先確認再刪除。",
+            status_code=400,
+            template="product_delete.html",
+        )
+    try:
+        storage.delete_catalog_product(user, product_id)
+    except CatalogNotFound:
+        return _product_page(request, None, status_code=404)
+    except PermissionError:
+        return _catalog_forbidden(request, product)
+    except CatalogError as exc:
+        return _product_page(
+            request,
+            _catalog_product(product_id) or product,
+            error=str(exc),
+            status_code=400,
+            template="product_delete.html",
+        )
+    except Exception:
+        return _product_page(
+            request,
+            product,
+            error="暫時無法刪除，請稍後再試。",
+            status_code=500,
+            template="product_delete.html",
+        )
+    return RedirectResponse("/catalog?notice=deleted", status_code=303)
 
 
 @app.get("/favicon.ico")
