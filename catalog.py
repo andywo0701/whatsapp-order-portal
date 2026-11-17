@@ -14,7 +14,7 @@ from typing import Any
 from xml.sax.saxutils import escape
 from zoneinfo import ZoneInfo
 
-from auth import STAFF
+from auth import STAFF, can_manage
 
 HK = ZoneInfo("Asia/Hong_Kong")
 
@@ -209,7 +209,7 @@ def merge_catalogs(local: object, published: object) -> dict[str, Any]:
     is ignored. The same rule applies to option prices. Omitting options, or
     leaving an option price blank, does not wipe a known option price. A row
     marked 人手輸入 keeps that source, so a later blank cell cannot clear the
-    hand edit. Rows already deleted by Super Admin are not restored. Omitting
+    hand edit. Rows already deleted by staff are not restored. Omitting
     a product from the publish does not delete it.
     """
     base = _normalize_document(local)
@@ -264,13 +264,13 @@ def apply_edit(
     note: str,
     options: list[dict[str, Any]] | None,
 ) -> dict[str, Any]:
-    """Super Admin edit. A blank price does not erase a known price or option price.
+    """Staff edit. A blank price does not erase a known price or option price.
 
     Passing options replaces the saved option list. A blank option price keeps
     the price already stored for that slot. Checking clear removes that option.
     The product id stays the same, and source becomes 人手輸入.
     """
-    _require_super(actor)
+    _require_staff(actor)
     cleaned_name = _clean_name(name)
     if not cleaned_name:
         raise CatalogError("請填寫貨品名稱。")
@@ -336,7 +336,7 @@ def edit_slots(options: list[dict[str, Any]] | None, extra: int = 3, limit: int 
 
 
 def apply_delete(document: dict[str, Any], product_id: str, actor: str) -> dict[str, Any]:
-    _require_super(actor)
+    _require_staff(actor)
     doc = normalize_document(copy.deepcopy(document))
     row = _find(doc, product_id)
     now = _now()
@@ -779,8 +779,8 @@ def _find(document: dict[str, Any], product_id: str) -> dict[str, Any]:
     raise CatalogNotFound("找不到這項貨品。")
 
 
-def _require_super(actor: str) -> None:
-    if STAFF.get(actor) != "super_admin":
+def _require_staff(actor: str) -> None:
+    if not can_manage(actor):
         raise PermissionError("沒有權限。")
 
 

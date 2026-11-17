@@ -121,8 +121,8 @@ class DeleteSubmissionTests(unittest.TestCase):
         self.assertRegex(home.text, r'name="files"[^>]*required')
         self.assertNotIn(self.passwords["Andy"], home.text)
 
-    def test_admins_cannot_delete(self) -> None:
-        sub_id = self._make(note="keep-me", payload=b"admin-blocked")
+    def test_admins_can_delete(self) -> None:
+        sub_id = self._make(note="keep-me", payload=b"admin-can-delete")
         before = self._manifest_bytes(sub_id)
         file_before = self._file_bytes(sub_id, "notes.txt")
 
@@ -132,41 +132,43 @@ class DeleteSubmissionTests(unittest.TestCase):
                 home = client.get("/")
                 self.assertEqual(home.status_code, 200)
                 self.assertIn(f"/submission/{sub_id}", home.text)
-                self.assertNotIn("/delete", home.text)
-                self.assertNotIn(CONFIRM, home.text)
-                self.assertNotIn("刪除這筆提交", home.text)
+                self.assertIn(f'href="/submission/{sub_id}/delete"', home.text)
+                self.assertIn("批量刪除", home.text)
+                self.assertIn("ThreeGoodies 落單上載", home.text)
 
                 detail = client.get(f"/submission/{sub_id}")
                 self.assertEqual(detail.status_code, 200)
-                self.assertNotIn("/delete", detail.text)
-                self.assertNotIn("刪除這筆提交", detail.text)
+                self.assertIn(f'href="/submission/{sub_id}/delete"', detail.text)
+                self.assertIn("刪除這筆提交", detail.text)
                 self.assertIn("未指定日期", detail.text)
+                self.assertNotIn("沒有權限。", detail.text)
 
-                blocked_get = client.get(f"/submission/{sub_id}/delete")
-                self.assertEqual(blocked_get.status_code, 403)
-                self.assertIn("沒有權限。", blocked_get.text)
-                self.assertNotIn(CONFIRM, blocked_get.text)
-                self.assertNotIn('name="confirm"', blocked_get.text)
-
-                blocked_post = client.post(
-                    f"/submission/{sub_id}/delete",
-                    data={"csrf": _csrf(home.text), "confirm": CONFIRM},
-                    follow_redirects=False,
-                )
-                self.assertEqual(blocked_post.status_code, 403)
-                self.assertIn("沒有權限。", blocked_post.text)
-                self.assertNotIn(self.passwords[name], blocked_post.text)
+                opened = client.get(f"/submission/{sub_id}/delete")
+                self.assertEqual(opened.status_code, 200)
+                self.assertIn(CONFIRM, opened.text)
+                self.assertIn('name="confirm"', opened.text)
+                self.assertNotIn("沒有權限。", opened.text)
                 self.assertEqual(self._manifest_bytes(sub_id), before)
                 self.assertEqual(self._file_bytes(sub_id, "notes.txt"), file_before)
-                self.assertIn(sub_id, self._listed_ids())
 
+        debbie = self._login("Debbie")
+        deleted = debbie.post(
+            f"/submission/{sub_id}/delete",
+            data={"csrf": _csrf(debbie.get(f"/submission/{sub_id}/delete").text), "confirm": CONFIRM},
+            follow_redirects=False,
+        )
+        self.assertEqual(deleted.status_code, 303)
+        self.assertEqual(deleted.headers["location"], "/?notice=deleted")
+        manifest = self._manifest(sub_id)
+        self.assertEqual(manifest["status"], "deleted")
+        self.assertEqual(manifest["status_label"], "已刪除")
+        self.assertEqual(manifest["deleted_by"], "Debbie")
+        self.assertEqual(self._file_bytes(sub_id, "notes.txt"), file_before)
+        self.assertNotIn(sub_id, self._listed_ids())
+        stamped = self._manifest_bytes(sub_id)
         with self.assertRaises(PermissionError):
-            app_module.storage.soft_delete_submission(sub_id, "Debbie")
-        with self.assertRaises(PermissionError):
-            app_module.storage.soft_delete_submission(sub_id, "Taya")
-        with self.assertRaises(PermissionError):
-            app_module.storage.soft_delete_submission(sub_id, "Katherine")
-        self.assertEqual(self._manifest_bytes(sub_id), before)
+            app_module.storage.soft_delete_submission(sub_id, "Guest")
+        self.assertEqual(self._manifest_bytes(sub_id), stamped)
 
         anon = TestClient(app_module.app)
         anon_post = anon.post(
@@ -176,7 +178,7 @@ class DeleteSubmissionTests(unittest.TestCase):
         )
         self.assertEqual(anon_post.status_code, 303)
         self.assertIn("/login", anon_post.headers["location"])
-        self.assertEqual(self._manifest_bytes(sub_id), before)
+        self.assertEqual(self._manifest_bytes(sub_id), stamped)
         self.assertEqual(self._file_bytes(sub_id, "notes.txt"), file_before)
 
     def test_super_admin_deletes_after_confirm_and_csrf(self) -> None:
@@ -312,7 +314,7 @@ class DeleteSubmissionTests(unittest.TestCase):
         debbie = self._login("Debbie")
         debbie_home = debbie.get("/")
         self.assertNotIn(f"/submission/{target}", debbie_home.text)
-        self.assertNotIn("/delete", debbie_home.text)
+        self.assertIn(f'href="/submission/{kept}/delete"', debbie_home.text)
         debbie_detail = debbie.get(f"/submission/{target}")
         self.assertEqual(debbie_detail.status_code, 200)
         self.assertIn("已刪除", debbie_detail.text)

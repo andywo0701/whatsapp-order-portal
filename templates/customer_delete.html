@@ -4,7 +4,7 @@
 <p class="crumb"><a href="/customers/{{ customer.id }}">返回這位顧客</a></p>
 {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
 <section class="card">
-  <p class="eyebrow">超級管理員 · Super Admin</p>
+  <p class="eyebrow">{{ role_label }} · {{ role_title }}</p>
   <h1>{{ roster_delete_confirm }}</h1>
   <p class="muted">確認之後，這位顧客會從名冊移除。之後的掃描如果再用同一個編號發布，也不會把這筆加回來。</p>
   <dl class="meta">

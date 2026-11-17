@@ -4,7 +4,7 @@
 <p class="crumb"><a href="/customers/{{ customer.id }}">返回這位顧客</a></p>
 {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
 <section class="card">
-  <p class="eyebrow">超級管理員 · Super Admin</p>
+  <p class="eyebrow">{{ role_label }} · {{ role_title }}</p>
   <h1>{{ roster_confirm }}</h1>
   <p class="muted">確認之後，這位顧客會標成正常。如果有多於一個電話，請自己選一個，系統不會代選。</p>
   <dl class="meta">

@@ -21,6 +21,7 @@ from auth import (
     ROLE_TITLES,
     STAFF,
     authenticate,
+    can_manage,
     change_own_password,
     reset_admin_password,
 )
@@ -66,6 +67,11 @@ MAX_FILES = 40
 MAX_FILE_BYTES = 40 * 1024 * 1024
 MAX_TOTAL_BYTES = 80 * 1024 * 1024
 DELETE_CONFIRM = "確定刪除此提交？"
+BULK_LIMIT = 200
+SELECT_FIRST = "請先選擇要刪除的項目。"
+BULK_MISSING = "找不到要刪除的項目。"
+BULK_TOO_MANY = "一次最多刪除 200 筆，請先少選一些。"
+_BULK_ID = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 RECORD_DATE_HINT = (
     "可選，以香港日曆計算。選了單日或日期範圍時，掃描程式發布的落單 Excel 只會保留落單日期落在這段日子裡的列，"
     "範圍以外的舊紀錄不會留在這份下載。留空時，這份 Excel 可以包含截至今天的全部現有紀錄。"
@@ -161,6 +167,7 @@ def _ctx(request: Request, **extra: Any) -> dict[str, Any]:
         "role": role,
         "role_label": ROLE_LABELS.get(role or "", ""),
         "role_title": ROLE_TITLES.get(role or "", ""),
+        "can_manage": can_manage(user),
         "csrf": _csrf_token(request),
         **extra,
     }
@@ -523,7 +530,7 @@ def delete_confirm(request: Request, sub_id: str) -> Response:
     if not re.fullmatch(r"[A-Za-z0-9_-]{6,64}", sub_id):
         return RedirectResponse("/", status_code=303)
     item = storage.get_submission(sub_id)
-    if STAFF.get(user) != "super_admin":
+    if not can_manage(user):
         return _delete_forbidden(request, item)
     if not item:
         return templates.TemplateResponse(
@@ -545,7 +552,7 @@ async def delete_submit(
     if not re.fullmatch(r"[A-Za-z0-9_-]{6,64}", sub_id):
         return RedirectResponse("/", status_code=303)
     item = storage.get_submission(sub_id)
-    if STAFF.get(user) != "super_admin":
+    if not can_manage(user):
         return _delete_forbidden(request, item)
     if not item:
         return templates.TemplateResponse(
@@ -592,11 +599,11 @@ ACCOUNT_NOTICES = {
 }
 
 
-def _staff_rows() -> list[dict[str, Any]]:
+def _staff_rows(actor: str) -> list[dict[str, Any]]:
     storage.refresh_password_records()
     rows: list[dict[str, Any]] = []
     for name, role in STAFF.items():
-        if role != "admin":
+        if role != "admin" or name == actor:
             continue
         record = storage.get_password_record(name)
         rows.append(
@@ -617,7 +624,8 @@ def _account_page(
     status_code: int = 200,
 ) -> Response:
     notice_code = request.query_params.get("notice") or ""
-    staff = _staff_rows() if STAFF.get(_current_user(request) or "") == "super_admin" else []
+    actor = _current_user(request) or ""
+    staff = _staff_rows(actor) if can_manage(actor) else []
     return templates.TemplateResponse(
         request,
         "account.html",
@@ -684,7 +692,7 @@ async def reset_password_submit(
     user = _current_user(request)
     if not user:
         return RedirectResponse("/login", status_code=303)
-    if STAFF.get(user) != "super_admin":
+    if not can_manage(user):
         return _account_page(request, error="沒有權限。", status_code=403)
     if not _valid_csrf(request, csrf):
         return _account_page(request, reset_error="請重新整理後再試。", status_code=400)
@@ -705,6 +713,7 @@ async def reset_password_submit(
 def _roster_notice(code: str | None) -> str | None:
     return {
         "deleted": "已刪除此顧客。",
+        "bulk-deleted": "已刪除所選顧客。",
         "confirmed": "已確認這位顧客。",
         "saved": "已儲存更正。",
     }.get(code or "")
@@ -836,7 +845,7 @@ def customer_confirm_page(request: Request, customer_id: str) -> Response:
     if not user:
         return RedirectResponse("/login", status_code=303)
     customer = _customer_row(customer_id)
-    if STAFF.get(user) != "super_admin":
+    if not can_manage(user):
         return _roster_forbidden(request, customer)
     if not customer:
         return _customer_page(request, None, status_code=404)
@@ -855,7 +864,7 @@ async def customer_confirm_submit(
     if not user:
         return RedirectResponse("/login", status_code=303)
     customer = _customer_row(customer_id)
-    if STAFF.get(user) != "super_admin":
+    if not can_manage(user):
         return _roster_forbidden(request, customer)
     if not customer:
         return _customer_page(request, None, status_code=404)
@@ -906,7 +915,7 @@ def customer_edit_page(request: Request, customer_id: str) -> Response:
     if not user:
         return RedirectResponse("/login", status_code=303)
     customer = _customer_row(customer_id)
-    if STAFF.get(user) != "super_admin":
+    if not can_manage(user):
         return _roster_forbidden(request, customer)
     if not customer:
         return _customer_page(request, None, status_code=404)
@@ -932,7 +941,7 @@ async def customer_edit_submit(
     if not user:
         return RedirectResponse("/login", status_code=303)
     customer = _customer_row(customer_id)
-    if STAFF.get(user) != "super_admin":
+    if not can_manage(user):
         return _roster_forbidden(request, customer)
     if not customer:
         return _customer_page(request, None, status_code=404)
@@ -988,7 +997,7 @@ def customer_delete_page(request: Request, customer_id: str) -> Response:
     if not user:
         return RedirectResponse("/login", status_code=303)
     customer = _customer_row(customer_id)
-    if STAFF.get(user) != "super_admin":
+    if not can_manage(user):
         return _roster_forbidden(request, customer)
     if not customer:
         return _customer_page(request, None, status_code=404)
@@ -1006,7 +1015,7 @@ async def customer_delete_submit(
     if not user:
         return RedirectResponse("/login", status_code=303)
     customer = _customer_row(customer_id)
-    if STAFF.get(user) != "super_admin":
+    if not can_manage(user):
         return _roster_forbidden(request, customer)
     if not customer:
         return _customer_page(request, None, status_code=404)
@@ -1103,7 +1112,11 @@ async def scan_submit(
 
 
 def _catalog_notice(code: str | None) -> str | None:
-    return {"deleted": "已刪除此貨品。", "saved": "已儲存此貨品。"}.get(code or "")
+    return {
+        "deleted": "已刪除此貨品。",
+        "bulk-deleted": "已刪除所選貨品。",
+        "saved": "已儲存此貨品。",
+    }.get(code or "")
 
 
 def _form_text(form: Any, key: str) -> str:
@@ -1299,7 +1312,7 @@ def catalog_edit_page(request: Request, product_id: str) -> Response:
     if not user:
         return RedirectResponse("/login", status_code=303)
     product = _catalog_product(product_id)
-    if STAFF.get(user) != "super_admin":
+    if not can_manage(user):
         return _catalog_forbidden(request, product)
     if not product:
         return _product_page(request, None, status_code=404)
@@ -1312,7 +1325,7 @@ async def catalog_edit_submit(request: Request, product_id: str) -> Response:
     if not user:
         return RedirectResponse("/login", status_code=303)
     product = _catalog_product(product_id)
-    if STAFF.get(user) != "super_admin":
+    if not can_manage(user):
         return _catalog_forbidden(request, product)
     if not product:
         return _product_page(request, None, status_code=404)
@@ -1382,7 +1395,7 @@ def catalog_delete_page(request: Request, product_id: str) -> Response:
     if not user:
         return RedirectResponse("/login", status_code=303)
     product = _catalog_product(product_id)
-    if STAFF.get(user) != "super_admin":
+    if not can_manage(user):
         return _catalog_forbidden(request, product)
     if not product:
         return _product_page(request, None, status_code=404)
@@ -1400,7 +1413,7 @@ async def catalog_delete_submit(
     if not user:
         return RedirectResponse("/login", status_code=303)
     product = _catalog_product(product_id)
-    if STAFF.get(user) != "super_admin":
+    if not can_manage(user):
         return _catalog_forbidden(request, product)
     if not product:
         return _product_page(request, None, status_code=404)
@@ -1443,6 +1456,269 @@ async def catalog_delete_submit(
             template="product_delete.html",
         )
     return RedirectResponse("/catalog?notice=deleted", status_code=303)
+
+
+def bulk_phrase(count: int) -> str:
+    return f"確定刪除已選的 {count} 筆？"
+
+
+def _clean_bulk_ids(values: list[Any]) -> tuple[list[str], bool]:
+    chosen: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        if not isinstance(raw, str):
+            continue
+        text = raw.strip()
+        if not _BULK_ID.fullmatch(text) or text in seen:
+            continue
+        if len(chosen) >= BULK_LIMIT:
+            return chosen, True
+        seen.add(text)
+        chosen.append(text)
+    return chosen, False
+
+
+def _form_id_list(form: Any) -> list[Any]:
+    getlist = getattr(form, "getlist", None)
+    if not callable(getlist):
+        return []
+    return list(getlist("ids"))
+
+
+def _bulk_page(
+    request: Request,
+    *,
+    action: str,
+    cancel: str,
+    hint: str,
+    items: list[dict[str, str]],
+    error: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    phrase = bulk_phrase(len(items))
+    return templates.TemplateResponse(
+        request,
+        "bulk_delete.html",
+        _ctx(
+            request,
+            action=action,
+            cancel=cancel,
+            hint=hint,
+            items=items,
+            phrase=phrase,
+            error=error,
+        ),
+        status_code=status_code,
+    )
+
+
+def _submission_matches(ids: list[str]) -> list[dict[str, str]]:
+    found: list[dict[str, str]] = []
+    for sub_id in ids:
+        item = storage.get_submission(sub_id)
+        if not item or item.get("deleted"):
+            continue
+        kind = str(item.get("kind") or "提交")
+        when = str(item.get("submitted_display") or sub_id)
+        found.append({"id": str(item["id"]), "label": f"{kind} · {when}"})
+    return found
+
+
+def _catalog_matches(ids: list[str]) -> list[dict[str, str]]:
+    products = storage.get_catalog_document().get("products") or []
+    by_id = {
+        row["id"]: row
+        for row in products
+        if isinstance(row, dict) and isinstance(row.get("id"), str)
+    }
+    found: list[dict[str, str]] = []
+    for product_id in ids:
+        row = by_id.get(product_id)
+        if not row:
+            continue
+        shown = present_product(row)
+        found.append({"id": str(shown["id"]), "label": str(shown["name"])})
+    return found
+
+
+def _customer_matches(ids: list[str]) -> list[dict[str, str]]:
+    customers = storage.get_roster_document().get("customers") or []
+    by_id = {
+        row["id"]: row
+        for row in customers
+        if isinstance(row, dict) and isinstance(row.get("id"), str)
+    }
+    found: list[dict[str, str]] = []
+    for customer_id in ids:
+        row = by_id.get(customer_id)
+        if not row:
+            continue
+        shown = present_customer(row)
+        found.append({"id": str(shown["id"]), "label": str(shown["name_display"])})
+    return found
+
+
+@app.post("/submissions/bulk-delete")
+async def bulk_delete_submissions(request: Request) -> Response:
+    user = _current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    if not can_manage(user):
+        return _home_response(request, error="沒有權限。", notice=None, status_code=403)
+    form = await request.form()
+    if not _valid_csrf(request, _form_text(form, "csrf")):
+        return _home_response(request, error="請重新整理後再試。", notice=None, status_code=400)
+    ids, too_many = _clean_bulk_ids(_form_id_list(form))
+    if too_many:
+        return _home_response(request, error=BULK_TOO_MANY, notice=None, status_code=400)
+    if not ids:
+        return _home_response(request, error=SELECT_FIRST, notice=None, status_code=400)
+    items = _submission_matches(ids)
+    if not items:
+        return _home_response(request, error=BULK_MISSING, notice=None, status_code=400)
+    phrase = bulk_phrase(len(items))
+    confirm = _form_text(form, "confirm")
+    hint = "確認之後，這些提交會標成已刪除，並從近期列表隱藏。上載檔案不會被清掉。"
+    if confirm != phrase:
+        return _bulk_page(
+            request,
+            action="/submissions/bulk-delete",
+            cancel="/",
+            hint=hint,
+            items=items,
+            error="請先確認再刪除。" if confirm else None,
+            status_code=400 if confirm else 200,
+        )
+    deleted = 0
+    try:
+        for item in items:
+            updated = storage.soft_delete_submission(item["id"], user)
+            if updated:
+                deleted += 1
+    except PermissionError:
+        return _home_response(request, error="沒有權限。", notice=None, status_code=403)
+    except Exception:
+        return _bulk_page(
+            request,
+            action="/submissions/bulk-delete",
+            cancel="/",
+            hint=hint,
+            items=items,
+            error="暫時無法刪除，請稍後再試。",
+            status_code=500,
+        )
+    if deleted == 0:
+        return _home_response(request, error=BULK_MISSING, notice=None, status_code=400)
+    return RedirectResponse("/?notice=bulk-deleted", status_code=303)
+
+
+@app.post("/catalog/bulk-delete")
+async def bulk_delete_catalog(request: Request) -> Response:
+    user = _current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    form = await request.form()
+    query = _form_text(form, "q")
+    if not can_manage(user):
+        return _catalog_page(request, error="沒有權限。", status_code=403, query=query)
+    if not _valid_csrf(request, _form_text(form, "csrf")):
+        return _catalog_page(request, error="請重新整理後再試。", status_code=400, query=query)
+    ids, too_many = _clean_bulk_ids(_form_id_list(form))
+    if too_many:
+        return _catalog_page(request, error=BULK_TOO_MANY, status_code=400, query=query)
+    if not ids:
+        return _catalog_page(request, error=SELECT_FIRST, status_code=400, query=query)
+    items = _catalog_matches(ids)
+    if not items:
+        return _catalog_page(request, error=BULK_MISSING, status_code=400, query=query)
+    phrase = bulk_phrase(len(items))
+    confirm = _form_text(form, "confirm")
+    hint = "確認之後，這些貨品會從清單移除。之後的掃描如果再用同一個編號或名稱發布，也不會把它們加回來。已上載的檔案不會被清掉。"
+    if confirm != phrase:
+        return _bulk_page(
+            request,
+            action="/catalog/bulk-delete",
+            cancel="/catalog",
+            hint=hint,
+            items=items,
+            error="請先確認再刪除。" if confirm else None,
+            status_code=400 if confirm else 200,
+        )
+    try:
+        storage.delete_catalog_products(user, [item["id"] for item in items])
+    except PermissionError:
+        return _catalog_page(request, error="沒有權限。", status_code=403, query=query)
+    except CatalogNotFound:
+        return _catalog_page(request, error=BULK_MISSING, status_code=400, query=query)
+    except Exception:
+        return _bulk_page(
+            request,
+            action="/catalog/bulk-delete",
+            cancel="/catalog",
+            hint=hint,
+            items=items,
+            error="暫時無法刪除，請稍後再試。",
+            status_code=500,
+        )
+    location = "/catalog?notice=bulk-deleted"
+    if query:
+        location = f"{location}&q={quote(query)}"
+    return RedirectResponse(location, status_code=303)
+
+
+@app.post("/customers/bulk-delete")
+async def bulk_delete_customers(request: Request) -> Response:
+    user = _current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    form = await request.form()
+    query = _form_text(form, "q")
+    which = _form_text(form, "filter") or "all"
+    if not can_manage(user):
+        return _customers_page(request, error="沒有權限。", status_code=403, query=query, which=which)
+    if not _valid_csrf(request, _form_text(form, "csrf")):
+        return _customers_page(request, error="請重新整理後再試。", status_code=400, query=query, which=which)
+    ids, too_many = _clean_bulk_ids(_form_id_list(form))
+    if too_many:
+        return _customers_page(request, error=BULK_TOO_MANY, status_code=400, query=query, which=which)
+    if not ids:
+        return _customers_page(request, error=SELECT_FIRST, status_code=400, query=query, which=which)
+    items = _customer_matches(ids)
+    if not items:
+        return _customers_page(request, error=BULK_MISSING, status_code=400, query=query, which=which)
+    phrase = bulk_phrase(len(items))
+    confirm = _form_text(form, "confirm")
+    hint = "確認之後，這些顧客會從名冊移除。之後的掃描如果再用同一個編號發布，也不會把他們加回來。"
+    if confirm != phrase:
+        return _bulk_page(
+            request,
+            action="/customers/bulk-delete",
+            cancel="/customers",
+            hint=hint,
+            items=items,
+            error="請先確認再刪除。" if confirm else None,
+            status_code=400 if confirm else 200,
+        )
+    try:
+        storage.delete_customers(user, [item["id"] for item in items])
+    except PermissionError:
+        return _customers_page(request, error="沒有權限。", status_code=403, query=query, which=which)
+    except RosterNotFound:
+        return _customers_page(request, error=BULK_MISSING, status_code=400, query=query, which=which)
+    except Exception:
+        return _bulk_page(
+            request,
+            action="/customers/bulk-delete",
+            cancel="/customers",
+            hint=hint,
+            items=items,
+            error="暫時無法刪除，請稍後再試。",
+            status_code=500,
+        )
+    location = "/customers?notice=bulk-deleted"
+    if query or (which and which != "all"):
+        location = f"{location}&filter={quote(which or 'all')}&q={quote(query)}"
+    return RedirectResponse(location, status_code=303)
 
 
 @app.get("/favicon.ico")

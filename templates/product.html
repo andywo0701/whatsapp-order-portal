@@ -34,7 +34,7 @@
       {% endif %}
     </dd>
     <dt>備註</dt><dd>{% if product.note %}{{ product.note }}{% else %}<span class="unset">沒有備註</span>{% endif %}</dd>
-    {% if product.source_label %}<dt>來源</dt><dd>{{ product.source_label }}{% if product.source == "manual" %}（超級管理員在本網站更正，不是從檔案讀取）{% endif %}</dd>{% endif %}
+    {% if product.source_label %}<dt>來源</dt><dd>{{ product.source_label }}{% if product.source == "manual" %}（在本網站人手更正，不是從檔案讀取）{% endif %}</dd>{% endif %}
     <dt>最後更新日期</dt><dd>{{ product.updated_display }}</dd>
   </dl>
   {% if related %}
@@ -45,7 +45,7 @@
     {% endfor %}
   </ul>
   {% endif %}
-  {% if role == "super_admin" %}
+  {% if can_manage %}
   <div class="confirm-actions roster-actions">
     <a class="btn ghost" href="/catalog/{{ product.id }}/edit">更正這項貨品</a>
     <a class="btn quiet-danger" href="/catalog/{{ product.id }}/delete">刪除此貨品</a>

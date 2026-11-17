@@ -13,9 +13,11 @@ from zoneinfo import ZoneInfo
 from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
 from huggingface_hub.errors import EntryNotFoundError, RepositoryNotFoundError
 
+from auth import can_manage
 from catalog import (
     CATALOG_JSON_PATH,
     CATALOG_XLSX_PATH,
+    CatalogNotFound,
     apply_delete as apply_catalog_delete,
     apply_edit as apply_catalog_edit,
     catalog_xlsx_bytes,
@@ -29,6 +31,7 @@ from roster import (
     PURPOSE_LABELS,
     ROSTER_JSON_PATH,
     ROSTER_XLSX_PATH,
+    RosterNotFound,
     apply_confirm,
     apply_delete,
     apply_edit,
@@ -304,9 +307,7 @@ class Storage:
 
     def soft_delete_submission(self, sub_id: str, actor: str) -> dict[str, Any] | None:
         """Mark a submission 已刪除. Uploaded files stay where they are."""
-        from auth import STAFF
-
-        if STAFF.get(actor) != "super_admin":
+        if not can_manage(actor):
             raise PermissionError("沒有權限。")
         if not SAFE_ID.fullmatch(sub_id):
             return None
@@ -495,6 +496,22 @@ class Storage:
         self.save_roster_document(updated, f"Delete roster customer {customer_id}")
         return updated
 
+    def delete_customers(self, actor: str, customer_ids: list[str]) -> dict[str, Any]:
+        """Soft-delete several customers in one publish. Files are not removed."""
+        document = self.get_roster_document()
+        updated = document
+        removed = 0
+        for customer_id in customer_ids:
+            try:
+                updated = apply_delete(updated, customer_id, actor)
+            except RosterNotFound:
+                continue
+            removed += 1
+        if removed == 0:
+            raise RosterNotFound("找不到要刪除的顧客。")
+        self.save_roster_document(updated, f"Delete {removed} roster customers")
+        return updated
+
     def roster_workbook(self) -> bytes:
         return roster_xlsx_bytes(self.get_roster_document())
 
@@ -528,6 +545,22 @@ class Storage:
     def delete_catalog_product(self, actor: str, product_id: str) -> dict[str, Any]:
         updated = apply_catalog_delete(self.get_catalog_document(), product_id, actor)
         self.save_catalog_document(updated, f"Delete catalog product {product_id}")
+        return updated
+
+    def delete_catalog_products(self, actor: str, product_ids: list[str]) -> dict[str, Any]:
+        """Soft-delete several products in one publish. Uploaded files stay put."""
+        document = self.get_catalog_document()
+        updated = document
+        removed = 0
+        for product_id in product_ids:
+            try:
+                updated = apply_catalog_delete(updated, product_id, actor)
+            except CatalogNotFound:
+                continue
+            removed += 1
+        if removed == 0:
+            raise CatalogNotFound("找不到要刪除的貨品。")
+        self.save_catalog_document(updated, f"Delete {removed} catalog products")
         return updated
 
     def edit_catalog_product(

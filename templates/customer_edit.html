@@ -4,9 +4,9 @@
 <p class="crumb"><a href="/customers/{{ customer.id }}">返回這位顧客</a></p>
 {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
 <section class="card">
-  <p class="eyebrow">超級管理員 · Super Admin</p>
+  <p class="eyebrow">{{ role_label }} · {{ role_title }}</p>
   <h1>更正這位顧客</h1>
-  <p class="muted">請照原來的電話寫法修改。已有電話不可改成空白。儲存後，號碼來源會標成「人手輸入」，表示這是超級管理員在本網站更正的，不是從圖片讀取的。</p>
+  <p class="muted">請照原來的電話寫法修改。已有電話不可改成空白。儲存後，號碼來源會標成「人手輸入」，表示這是在本網站人手更正的，不是從圖片讀取的。</p>
   {% if customer.conflict %}
   <p class="deleted-note">目前有多於一個電話，系統沒有自動挑選：{{ customer.phone_display }}。請在下面寫下要保留的那一個。</p>
   {% endif %}

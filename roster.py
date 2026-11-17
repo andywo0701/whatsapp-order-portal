@@ -14,7 +14,7 @@ from typing import Any
 from xml.sax.saxutils import escape
 from zoneinfo import ZoneInfo
 
-from auth import STAFF
+from auth import STAFF, can_manage
 
 HK = ZoneInfo("Asia/Hong_Kong")
 
@@ -253,7 +253,7 @@ def merge_rosters(local: object, published: object) -> dict[str, Any]:
 
     A blank published phone never erases a known phone. Two different phones
     for the same name stay 待確認; this function does not choose one.
-    Rows already deleted by Super Admin are not restored.
+    Rows already deleted by staff are not restored.
     """
     base = normalize_document(local)
     incoming = normalize_document(published) if published is not None else empty_document()
@@ -303,7 +303,7 @@ def merge_rosters(local: object, published: object) -> dict[str, Any]:
 
 
 def apply_confirm(document: dict[str, Any], customer_id: str, actor: str, phone_choice: str) -> dict[str, Any]:
-    _require_super(actor)
+    _require_staff(actor)
     doc = normalize_document(copy.deepcopy(document))
     row = _find(doc, customer_id)
     before = _snapshot(row)
@@ -343,7 +343,7 @@ def apply_edit(
     phone: str,
     note: str,
 ) -> dict[str, Any]:
-    _require_super(actor)
+    _require_staff(actor)
     cleaned_note = _clean_note(note)
     if not cleaned_note:
         raise RosterError("請填寫更正說明。")
@@ -400,7 +400,7 @@ def apply_edit(
 
 
 def apply_delete(document: dict[str, Any], customer_id: str, actor: str) -> dict[str, Any]:
-    _require_super(actor)
+    _require_staff(actor)
     doc = normalize_document(copy.deepcopy(document))
     row = _find(doc, customer_id)
     now = _now()
@@ -548,8 +548,8 @@ def canonical_status(value: object) -> str:
     return ""
 
 
-def _require_super(actor: str) -> None:
-    if STAFF.get(actor) != "super_admin":
+def _require_staff(actor: str) -> None:
+    if not can_manage(actor):
         raise PermissionError("沒有權限。")
 
 

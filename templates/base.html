@@ -5,14 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
   <meta name="theme-color" content="#f6ebe8">
-  <title>{% block title %}落單上載{% endblock %}</title>
+  <title>{% block title %}ThreeGoodies 落單上載{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <header class="top">
     <a class="brand" href="/">
-      <span class="mark" aria-hidden="true">單</span>
-      <span>落單上載</span>
+      <span class="mark" aria-hidden="true">3</span>
+      <span>ThreeGoodies 落單上載</span>
     </a>
     {% if user %}
     <div class="top-right">
@@ -35,5 +35,20 @@
   <main class="wrap">
     {% block content %}{% endblock %}
   </main>
+  <script>
+    document.querySelectorAll("[data-select-all]").forEach(function (master) {
+      var form = master.closest("form");
+      if (!form) return;
+      var boxes = function () { return form.querySelectorAll('input[name="ids"]'); };
+      master.addEventListener("change", function () {
+        boxes().forEach(function (box) { box.checked = master.checked; });
+      });
+      form.addEventListener("change", function (event) {
+        if (!event.target.matches || !event.target.matches('input[name="ids"]')) return;
+        var list = boxes();
+        master.checked = list.length > 0 && Array.prototype.every.call(list, function (box) { return box.checked; });
+      });
+    });
+  </script>
 </body>
 </html>
