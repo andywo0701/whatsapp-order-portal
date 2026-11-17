@@ -78,8 +78,10 @@ class ChunkUploadTests(unittest.TestCase):
     def test_page_states_the_4gb_cap_and_accepts_500mb(self) -> None:
         self.assertGreaterEqual(app_module.MAX_FILE_BYTES, HALF_GB)
         self.assertGreaterEqual(app_module.MAX_TOTAL_BYTES, HALF_GB)
+        self.assertEqual(app_module.MIN_FILE_BYTES, HALF_GB)
         self.assertEqual(app_module.MAX_FILE_BYTES, 4 * 1024 * 1024 * 1024)
-        self.assertEqual(app_module.CHUNK_BYTES, 8 * 1024 * 1024)
+        self.assertEqual(app_module.CHUNK_BYTES, 2 * 1024 * 1024)
+        self.assertLessEqual(app_module.CHUNK_BYTES, 2 * 1024 * 1024)
         andy = self._login("Andy")
         home = andy.get("/")
         self.assertEqual(home.status_code, 200)
@@ -87,6 +89,7 @@ class ChunkUploadTests(unittest.TestCase):
         self.assertNotIn("40MB", home.text)
         self.assertNotIn("80MB", home.text)
         self.assertIn("upload.js", home.text)
+        self.assertIn(f'data-chunk-bytes="{app_module.CHUNK_BYTES}"', home.text)
         csrf = _csrf(home.text)
         started = andy.post(
             "/upload/start",
@@ -171,12 +174,19 @@ class ChunkUploadTests(unittest.TestCase):
         status = andy.get(f"/upload/{upload_id}", headers={"X-CSRF-Token": csrf})
         self.assertEqual(status.status_code, 200, status.text)
         self.assertEqual(status.json()["files"][0]["received"], [0, 1, 2])
+        part_dir = app_module.storage.local_root / ".chunk-uploads" / upload_id / "parts"
+        self.assertEqual(sorted(path.name for path in part_dir.iterdir()), ["0-0.part", "0-1.part", "0-2.part"])
+        self.assertEqual((part_dir / "0-0.part").read_bytes(), payload[:4])
+        self.assertEqual((part_dir / "0-1.part").read_bytes(), payload[4:8])
+        self.assertEqual((part_dir / "0-2.part").read_bytes(), payload[8:])
+        self.assertFalse((part_dir / "0.part").exists())
         too_wide = andy.post(
             f"/upload/{upload_id}/chunk",
             data={"csrf": csrf, "file_index": "0", "index": "0"},
             files={"chunk": ("chunk", b"abcde", "application/octet-stream")},
         )
         self.assertEqual(too_wide.status_code, 400, too_wide.text)
+        self.assertEqual((part_dir / "0-0.part").read_bytes(), payload[:4])
         done = andy.post(f"/upload/{upload_id}/complete", json={"csrf": csrf})
         self.assertEqual(done.status_code, 200, done.text)
         sub_id = done.json()["id"]

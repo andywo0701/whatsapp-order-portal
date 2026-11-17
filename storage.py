@@ -415,8 +415,7 @@ class Storage:
         folder, meta = self._load_chunk_meta(user, upload_id)
         spec = self._chunk_spec(meta, file_index, index)
         return {
-            "path": folder / "parts" / f"{file_index}.part",
-            "offset": spec["offset"],
+            "path": self._piece_path(folder, file_index, index),
             "expected": spec["expected"],
         }
 
@@ -424,8 +423,8 @@ class Storage:
         with self._lock_for(upload_id):
             folder, meta = self._load_chunk_meta(user, upload_id)
             spec = self._chunk_spec(meta, file_index, index)
-            part = folder / "parts" / f"{file_index}.part"
-            if not part.is_file() or part.stat().st_size < spec["offset"] + spec["expected"]:
+            part = self._piece_path(folder, file_index, index)
+            if not part.is_file() or part.stat().st_size != spec["expected"]:
                 raise ChunkUploadError("這一段不完整，請再試。")
             received = meta["files"][file_index]["received"]
             if index not in received:
@@ -438,16 +437,27 @@ class Storage:
         with self._lock_for(upload_id):
             folder, meta = self._load_chunk_meta(user, upload_id)
             sources: list[tuple[str, Path]] = []
+            assembled = folder / "assembled"
+            assembled.mkdir(exist_ok=True)
             for file_index, spec in enumerate(meta["files"]):
                 size = int(spec["size"])
                 chunk_bytes = int(meta["chunk_bytes"])
-                count = (size + chunk_bytes - 1) // chunk_bytes
+                count = (size + chunk_bytes - 1) // chunk_bytes if size else 0
                 if list(spec.get("received") or []) != list(range(count)):
                     raise ChunkUploadError("上載尚未完成，請再試一次。")
-                part = folder / "parts" / f"{file_index}.part"
-                if not part.is_file() or part.stat().st_size != size:
+                dest = assembled / f"{file_index}.bin"
+                with dest.open("wb") as outgoing:
+                    for index in range(count):
+                        part = self._piece_path(folder, file_index, index)
+                        expected = min(chunk_bytes, size - index * chunk_bytes)
+                        if not part.is_file() or part.stat().st_size != expected:
+                            raise ChunkUploadError("上載尚未完成，請再試一次。")
+                        with part.open("rb") as incoming:
+                            shutil.copyfileobj(incoming, outgoing, 1024 * 1024)
+                if dest.stat().st_size != size:
                     raise ChunkUploadError("上載尚未完成，請再試一次。")
-                sources.append((str(spec["name"]), part))
+                os.chmod(dest, 0o600)
+                sources.append((str(spec["name"]), dest))
             sub_id = self.create_submission_from_paths(
                 user=user,
                 kind=str(meta.get("kind") or ""),
@@ -475,6 +485,14 @@ class Storage:
         offset = index * chunk_bytes
         expected = min(chunk_bytes, size - offset)
         return {"offset": offset, "expected": expected}
+
+    def _piece_path(self, folder: Path, file_index: int, index: int) -> Path:
+        """One piece, one file, so parallel uploads do not share a growing part file."""
+        parts = (folder / "parts").resolve()
+        path = (parts / f"{file_index}-{index}.part").resolve()
+        if path.parent != parts:
+            raise ChunkUploadError("這一段不屬於這個檔案。")
+        return path
 
     def _chunk_dir(self, upload_id: str) -> Path:
         if not _UPLOAD_ID.fullmatch(upload_id):
