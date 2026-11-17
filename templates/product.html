@@ -16,7 +16,25 @@
     <dt>貨品名稱</dt><dd>{{ product.name }}</dd>
     <dt>價錢</dt><dd>{% if product.price_missing %}<span class="price-missing">尚缺</span>{% else %}{{ product.price_display }}{% endif %}</dd>
     <dt>圖片</dt><dd>{% if product.image %}{{ product.image }}{% if product.image_available %}<img class="product-shot" src="/catalog/{{ product.id }}/image" alt="{{ product.name }}">{% endif %}{% else %}<span class="unset">沒有圖片</span>{% endif %}</dd>
+    <dt>規格</dt>
+    <dd>
+      {% if product.options %}
+      <ul class="spec-list">
+        {% for option in product.options %}
+        <li>
+          {% if option.size %}尺碼／規格 {{ option.size }}{% endif %}
+          {% if option.color %}{% if option.size %} · {% endif %}顏色 {{ option.color }}{% endif %}
+          {% if option.other %}{% if option.size or option.color %} · {% endif %}{{ option.other }}{% endif %}
+          · {% if option.price_missing %}<span class="price-missing">尚缺</span>{% else %}{{ option.price }}{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <span class="unset">沒有規格</span>
+      {% endif %}
+    </dd>
     <dt>備註</dt><dd>{% if product.note %}{{ product.note }}{% else %}<span class="unset">沒有備註</span>{% endif %}</dd>
+    {% if product.source_label %}<dt>來源</dt><dd>{{ product.source_label }}{% if product.source == "manual" %}（超級管理員在本網站更正，不是從檔案讀取）{% endif %}</dd>{% endif %}
     <dt>最後更新日期</dt><dd>{{ product.updated_display }}</dd>
   </dl>
   {% if related %}
@@ -29,6 +47,7 @@
   {% endif %}
   {% if role == "super_admin" %}
   <div class="confirm-actions roster-actions">
+    <a class="btn ghost" href="/catalog/{{ product.id }}/edit">更正這項貨品</a>
     <a class="btn quiet-danger" href="/catalog/{{ product.id }}/delete">刪除此貨品</a>
   </div>
   {% endif %}

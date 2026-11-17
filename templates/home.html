@@ -46,7 +46,7 @@
     </fieldset>
     <fieldset class="date-window">
       <legend>WhatsApp 紀錄日期</legend>
-      <p class="hint" id="record-date-hint">可選，以香港日曆計算。留空就會處理檔案裡找到的所有日期。</p>
+      <p class="hint" id="record-date-hint">{{ record_date_hint }}</p>
       <div class="date-modes">
         <label class="chip">
           <input type="radio" name="record_mode" value=""{% if mode != 'day' and mode != 'range' %} checked{% endif %}>

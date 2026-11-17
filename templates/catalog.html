@@ -8,10 +8,13 @@
 <section class="card">
   <p class="eyebrow">貨品清單</p>
   <h1>貨品與價錢</h1>
-  <p class="muted">這裡只顯示掃描程式已經發布的清單。價錢會保持原來的寫法；還沒有價錢就顯示尚缺。這個網站不會從 Excel、Word 或圖片讀取或編造價錢。</p>
+  <p class="muted">這裡顯示已發布的清單。價錢會保持原來的寫法；還沒有價錢就顯示尚缺。下載的 Excel 會帶上規格，並在已有相片檔時把圖片嵌進去。這個網站不會從 Excel、Word 或圖片讀取或編造價錢。</p>
+  {% if role == "super_admin" %}
+  <p class="hint">你可以打開一項貨品，更正名稱、價錢、備註和規格。已有價錢留空不會被清掉。</p>
+  {% endif %}
   <form method="get" action="/catalog" class="stack roster-search">
-    <label>搜尋貨品、價錢或備註
-      <input type="search" name="q" value="{{ query }}" placeholder="輸入貨品名稱，或價錢的一部分" autocomplete="off">
+    <label>搜尋貨品、價錢、備註或規格
+      <input type="search" name="q" value="{{ query }}" placeholder="輸入貨品名稱、規格，或價錢的一部分" autocomplete="off">
     </label>
     <button type="submit" class="btn primary">搜尋</button>
   </form>
@@ -35,7 +38,7 @@
           <span class="feed-title">{{ row.name }}</span>
           {% if row.image %}<span class="tag tag-purpose-catalog">有圖片</span>{% endif %}
         </span>
-        <span class="feed-meta">價錢 {% if row.price_missing %}<span class="price-missing">尚缺</span>{% else %}{{ row.price_display }}{% endif %}</span>
+        <span class="feed-meta">價錢 {% if row.price_missing %}<span class="price-missing">尚缺</span>{% else %}{{ row.price_display }}{% endif %}{% if row.spec_summary %} · 規格 {{ row.spec_summary }}{% endif %}</span>
         <span class="feed-date{% if not row.note %} is-empty{% endif %}">{% if row.note %}{{ row.note }} · {% endif %}{{ row.updated_display }}</span>
       </a>
     </li>
