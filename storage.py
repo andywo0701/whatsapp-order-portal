@@ -17,6 +17,7 @@ from catalog import (
     CATALOG_JSON_PATH,
     CATALOG_XLSX_PATH,
     apply_delete as apply_catalog_delete,
+    apply_edit as apply_catalog_edit,
     catalog_xlsx_bytes,
     clean_image,
     empty_document as empty_catalog,
@@ -510,7 +511,7 @@ class Storage:
     def save_catalog_document(self, document: dict[str, Any], message: str) -> None:
         """Publish to the dataset first. A failed upload leaves the local catalog unchanged."""
         payload = json.dumps(document, ensure_ascii=False, indent=2).encode("utf-8")
-        workbook = catalog_xlsx_bytes(document)
+        workbook = catalog_xlsx_bytes(document, self.catalog_image_bytes(document))
         if self.is_ready():
             self.ensure_repo()
             self._api_client().create_commit(
@@ -529,8 +530,44 @@ class Storage:
         self.save_catalog_document(updated, f"Delete catalog product {product_id}")
         return updated
 
+    def edit_catalog_product(
+        self,
+        actor: str,
+        product_id: str,
+        name: str,
+        price: str,
+        note: str,
+        options: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        updated = apply_catalog_edit(
+            self.get_catalog_document(), product_id, actor, name, price, note, options
+        )
+        self.save_catalog_document(updated, f"Edit catalog product {product_id}")
+        return updated
+
     def catalog_workbook(self) -> bytes:
-        return catalog_xlsx_bytes(self.get_catalog_document())
+        document = self.get_catalog_document()
+        return catalog_xlsx_bytes(document, self.catalog_image_bytes(document))
+
+    def catalog_image_bytes(self, document: dict[str, Any]) -> dict[str, bytes]:
+        """Bytes already stored for catalog images. Remote image URLs are not fetched."""
+        found: dict[str, bytes] = {}
+        for row in document.get("products") or []:
+            if not isinstance(row, dict):
+                continue
+            name = clean_image(row.get("image"))
+            if not name or name in found or not image_is_displayable(name):
+                continue
+            path = self.resolve_catalog_image(row)
+            if path is None:
+                continue
+            try:
+                payload = path.read_bytes()
+            except OSError:
+                continue
+            if payload:
+                found[name] = payload
+        return found
 
     def resolve_catalog_image(self, product: dict[str, Any]) -> Path | None:
         """Local catalog image, or the same file name inside a source submission."""

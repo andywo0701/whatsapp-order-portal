@@ -305,6 +305,45 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   border: 1px solid var(--line);
   background: #fff;
 }
+.spec-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.spec-list li {
+  padding: 8px 12px;
+  border-radius: 14px;
+  background: #fff7f4;
+  border: 1px solid var(--line);
+}
+.option-list { display: grid; gap: 12px; }
+.option-row {
+  margin: 0;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid #ead3dc;
+  background: rgba(255, 250, 247, 0.86);
+}
+.option-row legend {
+  padding: 0 6px;
+  color: var(--rose-deep);
+  font-weight: 750;
+}
+.option-grid { display: grid; gap: 10px; }
+.option-clear {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-weight: 700;
+}
+.option-clear input {
+  width: 1.15rem;
+  height: 1.15rem;
+  accent-color: var(--rose-deep);
+}
 .phone-missing { color: var(--warn); font-weight: 750; }
 .roster-filters { margin-top: 14px; }
 a.chip {
@@ -416,6 +455,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .date-window:has(input[name="record_mode"][value="range"]:checked) .range-fields {
     grid-template-columns: 1fr 1fr;
   }
+  .option-grid { grid-template-columns: 1fr 1fr; }
   .confirm-actions { grid-template-columns: 1fr 1fr; }
   .roster-actions { grid-template-columns: 1fr; }
 }

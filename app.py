@@ -26,8 +26,11 @@ from auth import (
 )
 from catalog import (
     CATALOG_DELETE_CONFIRM,
+    CATALOG_EDIT_CONFIRM,
+    EDIT_SLOT_LIMIT,
     CatalogError,
     CatalogNotFound,
+    edit_slots,
     filter_products,
     present_product,
 )
@@ -63,6 +66,10 @@ MAX_FILES = 40
 MAX_FILE_BYTES = 40 * 1024 * 1024
 MAX_TOTAL_BYTES = 80 * 1024 * 1024
 DELETE_CONFIRM = "確定刪除此提交？"
+RECORD_DATE_HINT = (
+    "可選，以香港日曆計算。選了單日或日期範圍時，掃描程式發布的落單 Excel 只會保留落單日期落在這段日子裡的列，"
+    "範圍以外的舊紀錄不會留在這份下載。留空時，這份 Excel 可以包含截至今天的全部現有紀錄。"
+)
 LOGIN_WINDOW = 15 * 60
 LOGIN_MAX_TRIES = 8
 PURPOSE_CHOICES = {PURPOSE_AUTO, PURPOSE_ORDERS, PURPOSE_CUSTOMERS, PURPOSE_CATALOG}
@@ -172,10 +179,13 @@ def parse_record_dates(
     start: str | None,
     end: str | None,
 ) -> tuple[str | None, str | None]:
-    """Optional Hong Kong calendar window. Blank means process every date in the files.
+    """Optional Hong Kong calendar window stored on the manifest.
 
-    A single day is returned as the same start and end. Raises ValueError with a
-    Traditional Chinese message when the chosen dates are not usable.
+    Blank still omits record_date_start and record_date_end. A single day is
+    returned as the same start and end. The scanning bot uses a chosen window
+    when it builds the order Excel; this function does not build that workbook.
+    Raises ValueError with a Traditional Chinese message when the chosen dates
+    are not usable.
     """
     selected = (mode or "").strip()
     # Explicit 「不指定」 wins, including dates still posted by hidden inputs.
@@ -305,6 +315,7 @@ def _home_response(
             form_start=_echo_date(form_start),
             form_end=_echo_date(form_end),
             form_purpose=_form_purpose(form_purpose),
+            record_date_hint=RECORD_DATE_HINT,
         ),
         status_code=status_code,
     )
@@ -1092,7 +1103,58 @@ async def scan_submit(
 
 
 def _catalog_notice(code: str | None) -> str | None:
-    return {"deleted": "已刪除此貨品。"}.get(code or "")
+    return {"deleted": "已刪除此貨品。", "saved": "已儲存此貨品。"}.get(code or "")
+
+
+def _form_text(form: Any, key: str) -> str:
+    value = form.get(key)
+    if isinstance(value, str):
+        return value
+    return ""
+
+
+def _posted_options(form: Any) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for index in range(EDIT_SLOT_LIMIT):
+        clear = _form_text(form, f"option_clear_{index}")
+        rows.append(
+            {
+                "size": _form_text(form, f"option_size_{index}"),
+                "color": _form_text(form, f"option_color_{index}"),
+                "other": _form_text(form, f"option_other_{index}"),
+                "price": _form_text(form, f"option_price_{index}"),
+                "prev_size": _form_text(form, f"option_prev_size_{index}"),
+                "prev_color": _form_text(form, f"option_prev_color_{index}"),
+                "prev_other": _form_text(form, f"option_prev_other_{index}"),
+                "clear": clear in {"1", "on", "yes", "清除"},
+            }
+        )
+    return rows
+
+
+def _posted_slots(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
+    slots: list[dict[str, str]] = []
+    for item in rows:
+        if not item.get("clear") and not any(
+            str(item.get(key) or "")
+            for key in ("size", "color", "other", "price", "prev_size", "prev_color", "prev_other")
+        ):
+            continue
+        slots.append(
+            {
+                "size": str(item.get("size") or ""),
+                "color": str(item.get("color") or ""),
+                "other": str(item.get("other") or ""),
+                "price": str(item.get("price") or ""),
+                "prev_size": str(item.get("prev_size") or ""),
+                "prev_color": str(item.get("prev_color") or ""),
+                "prev_other": str(item.get("prev_other") or ""),
+                "clear": "1" if item.get("clear") else "",
+            }
+        )
+    if not slots:
+        slots = edit_slots([])
+    return slots
 
 
 def _catalog_product(product_id: str) -> dict[str, Any] | None:
@@ -1155,20 +1217,29 @@ def _product_page(
     error: str | None = None,
     status_code: int = 200,
     template: str = "product.html",
+    extra: dict[str, Any] | None = None,
 ) -> Response:
     source = product
-    shown = _catalog_view(product, with_image=template == "product.html") if product else None
+    shown = _catalog_view(product, with_image=template in {"product.html", "product_edit.html"}) if product else None
+    payload: dict[str, Any] = {
+        "product": shown,
+        "error": error,
+        "notice": _catalog_notice(request.query_params.get("notice")),
+        "related": _catalog_related(source) if source else [],
+        "catalog_delete_confirm": CATALOG_DELETE_CONFIRM,
+        "catalog_edit_confirm": CATALOG_EDIT_CONFIRM,
+    }
+    if extra:
+        payload.update(extra)
+    if template == "product_edit.html" and shown is not None and "edit_slots" not in payload:
+        payload["edit_name"] = shown["name"]
+        payload["edit_price"] = shown["price"]
+        payload["edit_note"] = shown["note"]
+        payload["edit_slots"] = edit_slots(shown["options"])
     return templates.TemplateResponse(
         request,
         template,
-        _ctx(
-            request,
-            product=shown,
-            error=error,
-            notice=_catalog_notice(request.query_params.get("notice")),
-            related=_catalog_related(source) if source else [],
-            catalog_delete_confirm=CATALOG_DELETE_CONFIRM,
-        ),
+        _ctx(request, **payload),
         status_code=status_code,
     )
 
@@ -1220,6 +1291,89 @@ def catalog_image(request: Request, product_id: str) -> Response:
     if path is None:
         return Response("找不到圖片。", status_code=404, media_type="text/plain; charset=utf-8")
     return FileResponse(path, filename=path.name, content_disposition_type="inline")
+
+
+@app.get("/catalog/{product_id}/edit", response_class=HTMLResponse)
+def catalog_edit_page(request: Request, product_id: str) -> Response:
+    user = _current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    product = _catalog_product(product_id)
+    if STAFF.get(user) != "super_admin":
+        return _catalog_forbidden(request, product)
+    if not product:
+        return _product_page(request, None, status_code=404)
+    return _product_page(request, product, template="product_edit.html")
+
+
+@app.post("/catalog/{product_id}/edit")
+async def catalog_edit_submit(request: Request, product_id: str) -> Response:
+    user = _current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    product = _catalog_product(product_id)
+    if STAFF.get(user) != "super_admin":
+        return _catalog_forbidden(request, product)
+    if not product:
+        return _product_page(request, None, status_code=404)
+    form = await request.form()
+    posted = _posted_options(form)
+    edit_extra = {
+        "edit_name": _form_text(form, "name"),
+        "edit_price": _form_text(form, "price"),
+        "edit_note": _form_text(form, "note"),
+        "edit_slots": _posted_slots(posted),
+    }
+    if not _valid_csrf(request, _form_text(form, "csrf")):
+        return _product_page(
+            request,
+            product,
+            error="請重新整理後再試。",
+            status_code=400,
+            template="product_edit.html",
+            extra=edit_extra,
+        )
+    if _form_text(form, "confirm") != CATALOG_EDIT_CONFIRM:
+        return _product_page(
+            request,
+            product,
+            error="請先確認再儲存。",
+            status_code=400,
+            template="product_edit.html",
+            extra=edit_extra,
+        )
+    try:
+        storage.edit_catalog_product(
+            user,
+            product_id,
+            edit_extra["edit_name"],
+            edit_extra["edit_price"],
+            edit_extra["edit_note"],
+            posted,
+        )
+    except CatalogNotFound:
+        return _product_page(request, None, status_code=404)
+    except PermissionError:
+        return _catalog_forbidden(request, product)
+    except CatalogError as exc:
+        return _product_page(
+            request,
+            _catalog_product(product_id) or product,
+            error=str(exc),
+            status_code=400,
+            template="product_edit.html",
+            extra=edit_extra,
+        )
+    except Exception:
+        return _product_page(
+            request,
+            product,
+            error="暫時無法儲存，請稍後再試。",
+            status_code=500,
+            template="product_edit.html",
+            extra=edit_extra,
+        )
+    return RedirectResponse(f"/catalog/{quote(product_id)}?notice=saved", status_code=303)
 
 
 @app.get("/catalog/{product_id}/delete", response_class=HTMLResponse)

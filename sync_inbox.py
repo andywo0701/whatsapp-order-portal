@@ -148,14 +148,33 @@ def validate_catalog_payload(data: object) -> None:
         for key in ("name", "price", "image", "note"):
             if key in row and row[key] is not None and not isinstance(row[key], str):
                 raise ValueError(f"{key} must be a string")
+        for key in ("options", "variants", "specs", "sizes", "colors", "規格", "尺碼", "顏色"):
+            if key not in row or row[key] is None:
+                continue
+            collection = row[key]
+            if isinstance(collection, str):
+                continue
+            if isinstance(collection, dict):
+                collection = [collection]
+            if not isinstance(collection, list):
+                raise ValueError(f"{key} must be a list")
+            for option in collection:
+                if isinstance(option, str):
+                    continue
+                if not isinstance(option, dict):
+                    raise ValueError("each option must be an object or string")
+                for field in ("price", "value", "size", "color", "other", "label", "價錢", "尺碼", "顏色", "單價"):
+                    if field in option and option[field] is not None and not isinstance(option[field], str):
+                        raise ValueError(f"option {field} must be a string")
 
 
 def publish_catalog(catalog_json: Path) -> None:
     """Upload catalog/catalog.json. The portal merges it and does not OCR prices.
 
     name and price must be strings when present, so a price keeps the characters
-    the scanner actually saw. A blank price does not erase a price already on
-    the portal, and a deleted product is not restored.
+    the scanner actually saw. Option prices must be strings too. A blank price
+    does not erase a price already on the portal, omitting options does not
+    erase known option prices, and a deleted product is not restored.
     """
     path = Path(catalog_json)
     data = json.loads(path.read_text(encoding="utf-8"))

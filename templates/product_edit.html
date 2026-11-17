@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}更正貨品｜貨品清單{% endblock %}
+{% block content %}
+<p class="crumb"><a href="/catalog/{{ product.id }}">返回這項貨品</a></p>
+{% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+<section class="card">
+  <p class="eyebrow">超級管理員 · Super Admin</p>
+  <h1>更正這項貨品</h1>
+  <p class="muted">請照原來的寫法修改價錢。已有價錢如果留空，不會被清掉。規格可以新增或修改；要拿掉某一項，請勾選清除。儲存後會標成「人手輸入」。</p>
+  <form method="post" action="/catalog/{{ product.id }}/edit" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>貨品名稱
+      <input type="text" name="name" value="{{ edit_name }}" maxlength="80" autocomplete="off" required>
+    </label>
+    <label>價錢
+      <input type="text" name="price" value="{{ edit_price }}" maxlength="60" autocomplete="off" placeholder="已有價錢留空不會被清掉">
+    </label>
+    <label>備註
+      <textarea name="note" rows="3" maxlength="500" placeholder="可留空">{{ edit_note }}</textarea>
+    </label>
+    <fieldset class="date-window">
+      <legend>規格選項</legend>
+      <p class="hint">每一列可以填尺碼／規格（例如大、中、細，或 S、M、L）、顏色，或其他規格。有單獨價錢就寫在該列；留空不會清掉這一列已有的價錢。</p>
+      <div class="option-list">
+        {% for slot in edit_slots %}
+        {% set i = loop.index0 %}
+        <fieldset class="option-row">
+          <legend>規格 {{ loop.index }}</legend>
+          <input type="hidden" name="option_prev_size_{{ i }}" value="{{ slot.prev_size }}">
+          <input type="hidden" name="option_prev_color_{{ i }}" value="{{ slot.prev_color }}">
+          <input type="hidden" name="option_prev_other_{{ i }}" value="{{ slot.prev_other }}">
+          <div class="option-grid">
+            <label>尺碼／規格
+              <input type="text" name="option_size_{{ i }}" value="{{ slot.size }}" maxlength="40" autocomplete="off" placeholder="大、中、細，或 S、M、L">
+            </label>
+            <label>顏色
+              <input type="text" name="option_color_{{ i }}" value="{{ slot.color }}" maxlength="40" autocomplete="off" placeholder="例如紅、藍">
+            </label>
+            <label>其他規格
+              <input type="text" name="option_other_{{ i }}" value="{{ slot.other }}" maxlength="80" autocomplete="off" placeholder="可留空">
+            </label>
+            <label>這一項的價錢
+              <input type="text" name="option_price_{{ i }}" value="{{ slot.price }}" maxlength="60" autocomplete="off" placeholder="沒有就留空">
+            </label>
+          </div>
+          <label class="option-clear">
+            <input type="checkbox" name="option_clear_{{ i }}" value="1"{% if slot.clear %} checked{% endif %}>
+            清除此規格
+          </label>
+        </fieldset>
+        {% endfor %}
+      </div>
+    </fieldset>
+    <div class="confirm-actions">
+      <button type="submit" class="btn primary" name="confirm" value="{{ catalog_edit_confirm }}">{{ catalog_edit_confirm }}</button>
+      <a class="btn ghost" href="/catalog/{{ product.id }}">取消</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

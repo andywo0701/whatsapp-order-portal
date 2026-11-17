@@ -36,13 +36,14 @@ from huggingface_hub.errors import EntryNotFoundError  # noqa: E402
 import app as app_module  # noqa: E402
 import scan as scan_module  # noqa: E402
 from auth import STAFF  # noqa: E402
-from catalog import merge_catalogs  # noqa: E402
+from catalog import apply_edit, catalog_xlsx_bytes, merge_catalogs  # noqa: E402
 from roster import detect_purpose  # noqa: E402
 from sync_inbox import validate_catalog_payload  # noqa: E402
 
 CSRF_RE = re.compile(r'name="csrf" value="([^"]+)"')
 ADMINS = ("Debbie", "Taya", "Katherine")
 CATALOG_DELETE = "確定刪除此貨品？"
+CATALOG_EDIT = "確定儲存此貨品？"
 SUBMISSION_DELETE = "確定刪除此提交？"
 WEBHOOK_URL = "https://scan.example.test/hook"
 WEBHOOK_KEY = "test-scan-key-not-real"
@@ -159,6 +160,7 @@ class CatalogAndScanTests(unittest.TestCase):
         self.assertIn("客戶資料", form)
         self.assertIn("貨品清單", form)
         self.assertIn("WhatsApp 紀錄日期", form)
+        self.assertIn(app_module.RECORD_DATE_HINT, home.text)
         self.assertIn("不指定", form)
         self.assertIn("單日", form)
         self.assertIn("日期範圍", form)
@@ -336,7 +338,13 @@ class CatalogAndScanTests(unittest.TestCase):
         self.assertIn('name="貨品清單"', self._workbook_xml(workbook.content))
 
         anon = TestClient(app_module.app)
-        for path in ("/catalog", "/catalog/catalog.xlsx", "/catalog/p0000aa01", "/catalog/p0000aa01/delete"):
+        for path in (
+            "/catalog",
+            "/catalog/catalog.xlsx",
+            "/catalog/p0000aa01",
+            "/catalog/p0000aa01/edit",
+            "/catalog/p0000aa01/delete",
+        ):
             blocked_page = anon.get(path, follow_redirects=False)
             self.assertEqual(blocked_page.status_code, 303, path)
             self.assertIn("/login", blocked_page.headers["location"])
@@ -498,6 +506,302 @@ class CatalogAndScanTests(unittest.TestCase):
         self.assertEqual(stored["deleted"][0]["name"], apple)
         revived = merge_catalogs(stored, {"products": [{"name": apple, "price": "USD 0.00"}]})
         self.assertEqual(revived["products"], [])
+
+    def test_catalog_edit_keeps_prices_options_and_permissions(self) -> None:
+        apple = "測試蘋果"
+        kept = "HK$00.00"
+        size_price = "USD 0.00"
+        base = {
+            "products": [
+                {
+                    "id": "p0000ee01",
+                    "name": apple,
+                    "price": kept,
+                    "source": "人手輸入",
+                    "options": [
+                        {"size": "大", "price": size_price},
+                        {"size": "中", "color": "紅", "price": kept},
+                    ],
+                }
+            ]
+        }
+        merged = merge_catalogs(
+            base,
+            {
+                "updated_by": "scanner",
+                "products": [
+                    {
+                        "name": apple,
+                        "price": "",
+                        "options": [
+                            {"size": "大", "price": ""},
+                            {"size": "細", "price": kept},
+                        ],
+                    }
+                ],
+            },
+        )
+        row = merged["products"][0]
+        self.assertEqual(row["id"], "p0000ee01")
+        self.assertEqual(row["price"], kept)
+        self.assertEqual(row["source"], "manual")
+        prices = {(item["size"], item["color"]): item["price"] for item in row["options"]}
+        self.assertEqual(prices[("大", "")], size_price)
+        self.assertEqual(prices[("中", "紅")], kept)
+        self.assertEqual(prices[("細", "")], kept)
+        omitted = merge_catalogs(base, {"products": [{"name": apple, "price": ""}]})
+        self.assertEqual(omitted["products"][0]["options"][0]["price"], size_price)
+        self.assertEqual(omitted["products"][0]["source"], "manual")
+        replaced = merge_catalogs(base, {"products": [{"name": apple, "price": "HK$00.00"}]})
+        self.assertEqual(replaced["products"][0]["price"], kept)
+        self.assertTrue(replaced["products"][0]["options"])
+        with self.assertRaises(ValueError):
+            validate_catalog_payload({"products": [{"name": apple, "options": [{"size": "大", "price": 12}]}]})
+        listed = merge_catalogs(
+            {"products": []},
+            {"products": [{"name": "測試杯子", "sizes": ["大", "中", "細"], "colors": ["紅"], "price": ""}]},
+        )
+        cup = listed["products"][0]
+        self.assertTrue(cup["id"].startswith("p"))
+        self.assertEqual([item["size"] for item in cup["options"] if item["size"]], ["大", "中", "細"])
+        self.assertEqual([item["color"] for item in cup["options"] if item["color"]], ["紅"])
+        self.assertEqual(cup["price"], "")
+
+        with self.assertRaises(PermissionError) as denied_edit:
+            apply_edit(base, "p0000ee01", "Debbie", apple, "", "", [])
+        self.assertEqual(str(denied_edit.exception), "沒有權限。")
+        cleared = apply_edit(
+            base,
+            "p0000ee01",
+            "Andy",
+            "測試蘋果改名",
+            "",
+            "假備註",
+            [
+                {
+                    "size": "大",
+                    "color": "",
+                    "other": "",
+                    "price": "",
+                    "prev_size": "大",
+                    "prev_color": "",
+                    "prev_other": "",
+                    "clear": True,
+                },
+                {"size": "S", "color": "", "other": "", "price": size_price, "prev_size": "", "prev_color": "", "prev_other": ""},
+            ],
+        )
+        edited = cleared["products"][0]
+        self.assertEqual(edited["id"], "p0000ee01")
+        self.assertEqual(edited["name"], "測試蘋果改名")
+        self.assertEqual(edited["price"], kept)
+        self.assertEqual(edited["note"], "假備註")
+        self.assertEqual(edited["source"], "manual")
+        self.assertEqual([(item["size"], item["price"]) for item in edited["options"]], [("S", size_price)])
+        blank_option = apply_edit(
+            base,
+            "p0000ee01",
+            "Andy",
+            apple,
+            "",
+            "",
+            [{"size": "大", "price": "", "prev_size": "大", "prev_color": "", "prev_other": ""}],
+        )
+        self.assertEqual(blank_option["products"][0]["options"][0]["price"], size_price)
+        self.assertEqual(blank_option["products"][0]["price"], kept)
+
+        self._write_catalog(
+            [
+                {
+                    "id": "p0000ee01",
+                    "name": apple,
+                    "price": kept,
+                    "image": "apple.png",
+                    "note": "",
+                    "options": [{"size": "大", "color": "", "other": "", "price": size_price}],
+                }
+            ]
+        )
+        images = app_module.storage.local_root / "catalog" / "images"
+        images.mkdir(parents=True, exist_ok=True)
+        (images / "apple.png").write_bytes(PNG)
+        before = self._catalog_bytes()
+        andy = self._login("Andy")
+        form = andy.get("/catalog/p0000ee01/edit")
+        self.assertEqual(form.status_code, 200)
+        self.assertIn(CATALOG_EDIT, form.text)
+        self.assertIn("尺碼／規格", form.text)
+        self.assertIn("顏色", form.text)
+        self.assertIn('name="csrf"', form.text)
+        self.assertNotIn("新單", form.text)
+        bad_csrf = andy.post(
+            "/catalog/p0000ee01/edit",
+            data={"csrf": "not-the-token", "confirm": CATALOG_EDIT, "name": apple, "price": kept, "note": ""},
+        )
+        self.assertEqual(bad_csrf.status_code, 400)
+        self.assertIn("請重新整理後再試。", bad_csrf.text)
+        self.assertEqual(self._catalog_bytes(), before)
+        unconfirmed = andy.post(
+            "/catalog/p0000ee01/edit",
+            data={"csrf": _csrf(form.text), "confirm": "儲存", "name": apple, "price": "", "note": "不該寫入"},
+        )
+        self.assertEqual(unconfirmed.status_code, 400)
+        self.assertIn("請先確認再儲存。", unconfirmed.text)
+        self.assertEqual(self._catalog_bytes(), before)
+
+        for username in ADMINS:
+            with self.subTest(username=username):
+                client = self._login(username)
+                blocked = client.get("/catalog/p0000ee01/edit")
+                self.assertEqual(blocked.status_code, 403)
+                self.assertIn("沒有權限。", blocked.text)
+                self.assertNotIn(CATALOG_EDIT, blocked.text)
+                denied = client.post(
+                    "/catalog/p0000ee01/edit",
+                    data={"csrf": _csrf(client.get("/catalog").text), "confirm": CATALOG_EDIT, "name": "不該改", "price": ""},
+                )
+                self.assertEqual(denied.status_code, 403)
+                self.assertIn("沒有權限。", denied.text)
+        self.assertEqual(self._catalog()["products"][0]["name"], apple)
+        self.assertEqual(self._catalog()["products"][0]["price"], kept)
+
+        storage = app_module.storage
+        failing = _FakeHub(fail=True)
+        storage.repo_id = "example/inbox"
+        storage.token = "test-token"
+        storage._api = failing
+        storage._ensured = True
+        with patch("storage.hf_hub_download", side_effect=EntryNotFoundError("catalog/catalog.json is absent")):
+            failed = andy.post(
+                "/catalog/p0000ee01/edit",
+                data={
+                    "csrf": _csrf(andy.get("/catalog/p0000ee01/edit").text),
+                    "confirm": CATALOG_EDIT,
+                    "name": apple,
+                    "price": "",
+                    "note": "失敗不寫入",
+                    "option_size_0": "大",
+                    "option_price_0": "",
+                    "option_prev_size_0": "大",
+                },
+            )
+        self.assertEqual(failed.status_code, 500)
+        self.assertIn("暫時無法儲存，請稍後再試。", failed.text)
+        self.assertEqual(self._catalog_bytes(), before)
+        self.assertEqual(failing.commits, [])
+
+        working = _FakeHub()
+        storage._api = working
+        with patch("storage.hf_hub_download", side_effect=EntryNotFoundError("catalog/catalog.json is absent")):
+            saved = andy.post(
+                "/catalog/p0000ee01/edit",
+                data={
+                    "csrf": _csrf(andy.get("/catalog/p0000ee01/edit").text),
+                    "confirm": CATALOG_EDIT,
+                    "name": apple,
+                    "price": "",
+                    "note": "假備註",
+                    "option_size_0": "大",
+                    "option_color_0": "",
+                    "option_other_0": "",
+                    "option_price_0": "",
+                    "option_prev_size_0": "大",
+                    "option_prev_color_0": "",
+                    "option_prev_other_0": "",
+                    "option_size_1": "M",
+                    "option_color_1": "藍",
+                    "option_price_1": kept,
+                },
+                follow_redirects=False,
+            )
+        self.assertEqual(saved.status_code, 303, saved.text)
+        self.assertEqual(saved.headers["location"], "/catalog/p0000ee01?notice=saved")
+        storage.repo_id = ""
+        storage.token = ""
+        detail = andy.get(saved.headers["location"])
+        self.assertIn("已儲存此貨品。", detail.text)
+        self.assertIn("人手輸入", detail.text)
+        self.assertIn("大", detail.text)
+        self.assertIn("M", detail.text)
+        self.assertIn("藍", detail.text)
+        self.assertIn(size_price, detail.text)
+        self.assertIn(kept, detail.text)
+        stored = self._catalog()["products"][0]
+        self.assertEqual(stored["id"], "p0000ee01")
+        self.assertEqual(stored["price"], kept)
+        self.assertEqual(stored["source"], "manual")
+        self.assertEqual(stored["note"], "假備註")
+        self.assertEqual(
+            [(item["size"], item["color"], item["price"]) for item in stored["options"]],
+            [("大", "", size_price), ("M", "藍", kept)],
+        )
+        self.assertEqual(len(working.commits), 1)
+        paths = {item.path_in_repo: item.path_or_fileobj for item in working.commits[0]["operations"]}
+        self.assertEqual(set(paths), {"catalog/catalog.json", "catalog/catalog.xlsx"})
+        published = json.loads(paths["catalog/catalog.json"].decode("utf-8"))
+        self.assertEqual(published["products"][0]["id"], "p0000ee01")
+        self.assertEqual(published["products"][0]["price"], kept)
+        sheet = self._sheet(paths["catalog/catalog.xlsx"])
+        self.assertIn("尺碼／規格", sheet)
+        self.assertIn("顏色", sheet)
+        self.assertIn("其他規格", sheet)
+        self.assertIn("M", sheet)
+        self.assertIn(kept, sheet)
+        with zipfile.ZipFile(BytesIO(paths["catalog/catalog.xlsx"])) as book:
+            self.assertEqual(book.read("xl/media/image1.png"), PNG)
+            drawing = book.read("xl/drawings/drawing1.xml").decode("utf-8")
+            self.assertIn("r:embed=", drawing)
+            self.assertNotIn("example.test", sheet)
+            self.assertNotIn("example.test", drawing)
+
+        readme = Path(__file__).resolve().parents[1].joinpath("README.md").read_text(encoding="utf-8")
+        self.assertIn(app_module.RECORD_DATE_HINT, readme)
+        self.assertIn("尺碼／規格", readme)
+        self.assertIn("顏色", readme)
+        self.assertIn("單價", readme)
+
+    def test_catalog_xlsx_embeds_stored_image_and_spec_columns(self) -> None:
+        apple = "測試蘋果"
+        pear = "測試香梨"
+        kept = "HK$00.00"
+        size_price = "USD 0.00"
+        document = {
+            "products": [
+                {
+                    "id": "p0000ff01",
+                    "name": apple,
+                    "image": "apple.png",
+                    "price": kept,
+                    "note": "假資料",
+                    "options": [
+                        {"size": "大", "price": size_price},
+                        {"size": "", "color": "紅", "price": ""},
+                        {"size": "", "color": "", "other": "禮盒", "price": kept},
+                    ],
+                },
+                {"id": "p0000ff02", "name": pear, "image": "", "price": ""},
+                {"id": "p0000ff03", "name": "測試網址", "image": "https://example.test/secret.png", "price": kept},
+            ]
+        }
+        workbook = catalog_xlsx_bytes(document, {"apple.png": PNG, "https://example.test/secret.png": PNG})
+        with zipfile.ZipFile(BytesIO(workbook)) as book:
+            names = book.namelist()
+            self.assertEqual(book.read("xl/media/image1.png"), PNG)
+            self.assertEqual([name for name in names if name.startswith("xl/media/")], ["xl/media/image1.png"])
+            sheet = book.read("xl/worksheets/sheet1.xml").decode("utf-8")
+            self.assertNotIn("example.test", sheet)
+            self.assertNotIn("secret.png", sheet)
+        for column in ("貨品名稱", "圖片", "尺碼／規格", "顏色", "其他規格", "價錢"):
+            self.assertIn(column, sheet)
+        self.assertIn(apple, sheet)
+        self.assertIn("大", sheet)
+        self.assertIn("紅", sheet)
+        self.assertIn("禮盒", sheet)
+        self.assertIn(size_price, sheet)
+        self.assertIn(kept, sheet)
+        self.assertIn("尚缺", sheet)
+        self.assertIn(pear, sheet)
+        self.assertNotIn("沒有", sheet)
 
     def test_scan_requires_login_csrf_and_is_limited(self) -> None:
         anon = TestClient(app_module.app)
