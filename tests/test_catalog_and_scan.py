@@ -418,7 +418,9 @@ class CatalogAndScanTests(unittest.TestCase):
         self.assertIn(price, detail.text)
         self.assertIn("<img", detail.text)
         self.assertIn("/catalog/p0000bb01/image", detail.text)
-        self.assertNotIn("/delete", detail.text)
+        self.assertIn("/catalog/p0000bb01/edit", detail.text)
+        self.assertIn("/catalog/p0000bb01/delete", detail.text)
+        self.assertNotIn("沒有權限。", detail.text)
         image = debbie.get("/catalog/p0000bb01/image")
         self.assertEqual(image.status_code, 200)
         self.assertEqual(image.content, PNG)
@@ -430,20 +432,30 @@ class CatalogAndScanTests(unittest.TestCase):
         for username in ADMINS:
             with self.subTest(username=username):
                 client = self._login(username)
-                blocked = client.get("/catalog/p0000bb01/delete")
-                self.assertEqual(blocked.status_code, 403)
-                self.assertIn("沒有權限。", blocked.text)
-                self.assertNotIn(CATALOG_DELETE, blocked.text)
-                denied = client.post(
-                    "/catalog/p0000bb01/delete",
-                    data={"csrf": _csrf(client.get("/catalog").text), "confirm": CATALOG_DELETE},
-                )
-                self.assertEqual(denied.status_code, 403)
-                self.assertIn("沒有權限。", denied.text)
-                submission_block = client.get(f"/submission/{submission}/delete")
-                self.assertEqual(submission_block.status_code, 403)
-                self.assertIn("沒有權限。", submission_block.text)
+                opened = client.get("/catalog/p0000bb01/delete")
+                self.assertEqual(opened.status_code, 200)
+                self.assertIn(CATALOG_DELETE, opened.text)
+                self.assertNotIn("沒有權限。", opened.text)
+                edit_page = client.get("/catalog/p0000bb01/edit")
+                self.assertEqual(edit_page.status_code, 200)
+                self.assertIn(CATALOG_EDIT, edit_page.text)
+                submission_page = client.get(f"/submission/{submission}/delete")
+                self.assertEqual(submission_page.status_code, 200)
+                self.assertIn(SUBMISSION_DELETE, submission_page.text)
+                self.assertNotIn("沒有權限。", submission_page.text)
         self.assertEqual(self._catalog()["products"][0]["price"], price)
+        removed = debbie.post(
+            "/catalog/p0000bb01/delete",
+            data={"csrf": _csrf(debbie.get("/catalog/p0000bb01/delete").text), "confirm": CATALOG_DELETE},
+            follow_redirects=False,
+        )
+        self.assertEqual(removed.status_code, 303)
+        stored = self._catalog()
+        self.assertEqual(stored["products"], [])
+        self.assertEqual(stored["deleted"][0]["deleted_by"], "Debbie")
+        self.assertEqual(stored["deleted"][0]["price"], price)
+        revived = merge_catalogs(stored, {"products": [{"id": "p0000bb01", "name": apple, "price": "USD 0.00"}]})
+        self.assertEqual(revived["products"], [])
         self.assertEqual((app_module.storage.local_root / submission / "files" / "apple.png").read_bytes(), PNG)
 
     def test_super_admin_delete_publishes_first(self) -> None:
@@ -567,9 +579,13 @@ class CatalogAndScanTests(unittest.TestCase):
         self.assertEqual([item["color"] for item in cup["options"] if item["color"]], ["紅"])
         self.assertEqual(cup["price"], "")
 
-        with self.assertRaises(PermissionError) as denied_edit:
-            apply_edit(base, "p0000ee01", "Debbie", apple, "", "", [])
-        self.assertEqual(str(denied_edit.exception), "沒有權限。")
+        by_debbie = apply_edit(base, "p0000ee01", "Debbie", apple, "", "", None)
+        self.assertEqual(by_debbie["products"][0]["id"], "p0000ee01")
+        self.assertEqual(by_debbie["products"][0]["name"], apple)
+        self.assertEqual(by_debbie["products"][0]["price"], kept)
+        self.assertEqual(by_debbie["products"][0]["source"], "manual")
+        self.assertEqual(by_debbie["products"][0]["options"][0]["price"], size_price)
+        self.assertEqual(by_debbie["updated_by"], "Debbie")
         cleared = apply_edit(
             base,
             "p0000ee01",
@@ -652,16 +668,18 @@ class CatalogAndScanTests(unittest.TestCase):
         for username in ADMINS:
             with self.subTest(username=username):
                 client = self._login(username)
-                blocked = client.get("/catalog/p0000ee01/edit")
-                self.assertEqual(blocked.status_code, 403)
-                self.assertIn("沒有權限。", blocked.text)
-                self.assertNotIn(CATALOG_EDIT, blocked.text)
+                opened = client.get("/catalog/p0000ee01/edit")
+                self.assertEqual(opened.status_code, 200)
+                self.assertIn(CATALOG_EDIT, opened.text)
+                self.assertIn("尺碼／規格", opened.text)
+                self.assertIn('name="csrf"', opened.text)
+                self.assertNotIn("沒有權限。", opened.text)
                 denied = client.post(
                     "/catalog/p0000ee01/edit",
-                    data={"csrf": _csrf(client.get("/catalog").text), "confirm": CATALOG_EDIT, "name": "不該改", "price": ""},
+                    data={"csrf": _csrf(opened.text), "confirm": "不儲存", "name": "不該改", "price": ""},
                 )
-                self.assertEqual(denied.status_code, 403)
-                self.assertIn("沒有權限。", denied.text)
+                self.assertEqual(denied.status_code, 400)
+                self.assertIn("請先確認再儲存。", denied.text)
         self.assertEqual(self._catalog()["products"][0]["name"], apple)
         self.assertEqual(self._catalog()["products"][0]["price"], kept)
 

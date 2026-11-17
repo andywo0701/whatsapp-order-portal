@@ -64,6 +64,7 @@ a { color: var(--rose-deep); }
   background: linear-gradient(160deg, var(--blush), var(--lavender));
   color: var(--rose-deep);
   font-weight: 750;
+  font-size: 1.25rem;
 }
 .top-right, .who, .top-actions {
   display: flex;
@@ -382,14 +383,39 @@ a.chip.is-on {
   width: 100%;
   border-radius: 16px;
 }
+.bulk-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 14px;
+}
+.bulk-check, .row-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 750;
+  color: var(--rose-deep);
+}
+.bulk-check input, .row-check input {
+  width: 1.2rem;
+  height: 1.2rem;
+  margin: 0;
+  accent-color: var(--rose-deep);
+}
+.bulk-bar .btn { width: auto; }
 .feed-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   align-items: center;
 }
-.feed-row:has(.feed-delete) {
-  grid-template-columns: minmax(0, 1fr) auto;
+.feed-row:has(.row-check) {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+.feed-row:has(.row-check):has(.feed-delete) {
+  grid-template-columns: auto minmax(0, 1fr) auto;
 }
 .btn.quiet-danger {
   width: auto;
@@ -460,6 +486,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .roster-actions { grid-template-columns: 1fr; }
 }
 @media (max-width: 560px) {
-  .feed-row:has(.feed-delete) { grid-template-columns: minmax(0, 1fr); }
-  .feed-delete { justify-self: end; }
+  .brand { font-size: 0.95rem; }
+  .feed-row:has(.row-check):has(.feed-delete) { grid-template-columns: auto minmax(0, 1fr); }
+  .feed-delete { justify-self: end; grid-column: 2; }
 }

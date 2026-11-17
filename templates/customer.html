@@ -15,7 +15,7 @@
   <dl class="meta">
     <dt>顧客姓名</dt><dd>{% if customer.name %}{{ customer.name }}{% else %}<span class="phone-missing">尚缺</span>{% endif %}</dd>
     <dt>電話</dt><dd>{% if customer.phone_missing %}<span class="phone-missing">尚缺</span>{% else %}{{ customer.phone_display }}{% endif %}</dd>
-    <dt>號碼來源</dt><dd>{{ customer.phone_source_label }}{% if customer.phone_source == 'manual' %}（超級管理員在本網站更正，不是從圖片讀取）{% endif %}</dd>
+    <dt>號碼來源</dt><dd>{{ customer.phone_source_label }}{% if customer.phone_source == 'manual' %}（在本網站人手更正，不是從圖片讀取）{% endif %}</dd>
     <dt>最後更新日期</dt><dd>{{ customer.updated_display }}</dd>
     <dt>狀態</dt><dd><span class="tag tag-{{ customer.status }}">{{ customer.status_label }}</span></dd>
     <dt>備註／待確認</dt><dd>{% if customer.note %}{{ customer.note }}{% else %}<span class="unset">沒有備註</span>{% endif %}</dd>
@@ -24,7 +24,7 @@
     {% endif %}
   </dl>
   {% if customer.conflict %}
-  <p class="deleted-note">同名有多於一個電話，系統沒有自動挑選。請超級管理員確認要保留哪一個。</p>
+  <p class="deleted-note">同名有多於一個電話，系統沒有自動挑選。請同事確認要保留哪一個。</p>
   <ul class="files">
     {% for item in customer.phones %}
     <li>{{ item.phone }} · {{ item.source_label }}</li>
@@ -50,7 +50,7 @@
   </ul>
   {% endif %}
 
-  {% if role == "super_admin" %}
+  {% if can_manage %}
   <div class="confirm-actions roster-actions">
     {% if customer.status == 'pending' or customer.conflict %}
     <a class="btn primary" href="/customers/{{ customer.id }}/confirm">確認此顧客</a>

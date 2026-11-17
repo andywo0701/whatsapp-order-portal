@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}確認刪除｜落單上載{% endblock %}
+{% block title %}確認刪除｜ThreeGoodies 落單上載{% endblock %}
 {% block content %}
 <p class="crumb"><a href="/submission/{{ item.id }}">返回這筆提交</a></p>
 {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
 <section class="card">
-  <p class="eyebrow">超級管理員 · Super Admin</p>
+  <p class="eyebrow">{{ role_label }} · {{ role_title }}</p>
   {% if item.deleted %}
   <h1>這筆提交已經刪除</h1>
   <p class="muted">它已標成已刪除，不會出現在近期列表。上載檔案仍然留在原處。</p>

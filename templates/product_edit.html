@@ -4,7 +4,7 @@
 <p class="crumb"><a href="/catalog/{{ product.id }}">返回這項貨品</a></p>
 {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
 <section class="card">
-  <p class="eyebrow">超級管理員 · Super Admin</p>
+  <p class="eyebrow">{{ role_label }} · {{ role_title }}</p>
   <h1>更正這項貨品</h1>
   <p class="muted">請照原來的寫法修改價錢。已有價錢如果留空，不會被清掉。規格可以新增或修改；要拿掉某一項，請勾選清除。儲存後會標成「人手輸入」。</p>
   <form method="post" action="/catalog/{{ product.id }}/edit" class="stack">

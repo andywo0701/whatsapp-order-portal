@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}確認批量刪除｜ThreeGoodies 落單上載{% endblock %}
+{% block content %}
+<p class="crumb"><a href="{{ cancel }}">返回列表</a></p>
+{% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+<section class="card">
+  <p class="eyebrow">{{ role_label }} · {{ role_title }}</p>
+  <h1>{{ phrase }}</h1>
+  <p class="muted">{{ hint }}</p>
+  <ul class="files">
+    {% for item in items %}
+    <li>{{ item.label }}</li>
+    {% endfor %}
+  </ul>
+  <div class="confirm-actions">
+    <form method="post" action="{{ action }}">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      {% for item in items %}
+      <input type="hidden" name="ids" value="{{ item.id }}">
+      {% endfor %}
+      <button type="submit" class="btn danger" name="confirm" value="{{ phrase }}">確定刪除</button>
+    </form>
+    <a class="btn ghost" href="{{ cancel }}">取消</a>
+  </div>
+</section>
+{% endblock %}

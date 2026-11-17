@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}貨品清單｜落單上載{% endblock %}
+{% block title %}貨品清單｜ThreeGoodies 落單上載{% endblock %}
 {% block content %}
 <p class="crumb"><a href="/">返回上載</a></p>
 {% if notice %}<p class="alert ok">{{ notice }}</p>{% endif %}
@@ -9,8 +9,8 @@
   <p class="eyebrow">貨品清單</p>
   <h1>貨品與價錢</h1>
   <p class="muted">這裡顯示已發布的清單。價錢會保持原來的寫法；還沒有價錢就顯示尚缺。下載的 Excel 會帶上規格，並在已有相片檔時把圖片嵌進去。這個網站不會從 Excel、Word 或圖片讀取或編造價錢。</p>
-  {% if role == "super_admin" %}
-  <p class="hint">你可以打開一項貨品，更正名稱、價錢、備註和規格。已有價錢留空不會被清掉。</p>
+  {% if can_manage %}
+  <p class="hint">你可以打開一項貨品，更正名稱、價錢、備註和規格。已有價錢留空不會被清掉。也可以在下面一次勾選多項再刪除。</p>
   {% endif %}
   <form method="get" action="/catalog" class="stack roster-search">
     <label>搜尋貨品、價錢、備註或規格
@@ -30,20 +30,38 @@
   <p class="muted quiet">還沒有貨品清單。請在上載頁選擇「貨品清單」，上載 Excel、Word 或貨品相片。掃描完成並發布後，價錢會出現在這裡。這個網站不會從檔案讀取或編造價錢。</p>
   <p class="back"><a class="btn ghost" href="/?purpose=catalog#upload-purpose">去上載貨品清單</a></p>
   {% elif rows %}
-  <ul class="feed">
-    {% for row in rows %}
-    <li>
-      <a class="feed-link" href="/catalog/{{ row.id }}">
-        <span class="feed-top">
-          <span class="feed-title">{{ row.name }}</span>
-          {% if row.image %}<span class="tag tag-purpose-catalog">有圖片</span>{% endif %}
-        </span>
-        <span class="feed-meta">價錢 {% if row.price_missing %}<span class="price-missing">尚缺</span>{% else %}{{ row.price_display }}{% endif %}{% if row.spec_summary %} · 規格 {{ row.spec_summary }}{% endif %}</span>
-        <span class="feed-date{% if not row.note %} is-empty{% endif %}">{% if row.note %}{{ row.note }} · {% endif %}{{ row.updated_display }}</span>
-      </a>
-    </li>
-    {% endfor %}
-  </ul>
+  <form method="post" action="/catalog/bulk-delete" class="bulk-form">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="q" value="{{ query }}">
+    {% if can_manage %}
+    <div class="bulk-bar">
+      <label class="bulk-check">
+        <input type="checkbox" data-select-all>
+        全選這頁
+      </label>
+      <button type="submit" class="btn quiet-danger">批量刪除</button>
+    </div>
+    {% endif %}
+    <ul class="feed">
+      {% for row in rows %}
+      <li class="feed-row">
+        {% if can_manage %}
+        <label class="row-check">
+          <input type="checkbox" name="ids" value="{{ row.id }}" aria-label="選擇 {{ row.name }}">
+        </label>
+        {% endif %}
+        <a class="feed-link" href="/catalog/{{ row.id }}">
+          <span class="feed-top">
+            <span class="feed-title">{{ row.name }}</span>
+            {% if row.image %}<span class="tag tag-purpose-catalog">有圖片</span>{% endif %}
+          </span>
+          <span class="feed-meta">價錢 {% if row.price_missing %}<span class="price-missing">尚缺</span>{% else %}{{ row.price_display }}{% endif %}{% if row.spec_summary %} · 規格 {{ row.spec_summary }}{% endif %}</span>
+          <span class="feed-date{% if not row.note %} is-empty{% endif %}">{% if row.note %}{{ row.note }} · {% endif %}{{ row.updated_display }}</span>
+        </a>
+      </li>
+      {% endfor %}
+    </ul>
+  </form>
   {% else %}
   <p class="muted quiet">沒有符合的貨品。</p>
   {% endif %}

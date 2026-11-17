@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}提交詳情｜落單上載{% endblock %}
+{% block title %}提交詳情｜ThreeGoodies 落單上載{% endblock %}
 {% block content %}
 <p class="crumb"><a href="/">返回列表</a></p>
 {% if notice == "submitted" %}
@@ -67,10 +67,10 @@
 
   {% if item.deleted %}
   <p class="deleted-note">這筆提交已標成已刪除，不會出現在近期列表。上載檔案仍留在原處。</p>
-  {% elif role == "super_admin" %}
+  {% elif can_manage %}
   <div class="delete-panel">
     <h2>刪除這筆提交</h2>
-    <p class="muted">只有超級管理員可以刪除舊紀錄。下一步會先請你確認，檔案不會在這一步被清掉。</p>
+    <p class="muted">下一步會先請你確認，檔案不會在這一步被清掉。</p>
     <a class="btn quiet-danger" href="/submission/{{ item.id }}/delete">刪除這筆提交</a>
   </div>
   {% endif %}

@@ -291,9 +291,10 @@ class CustomerRosterTests(unittest.TestCase):
         self.assertEqual(saved["deleted_by"], "Andy")
         self.assertEqual((app_module.storage.local_root / customer_id / "files" / "notes.txt").read_bytes(), b"fake-contact-export")
         self.assertNotIn(customer_id, {item["id"] for item in app_module.storage.list_submissions()})
-        blocked = debbie.get(f"/submission/{customer_id}/delete")
-        self.assertEqual(blocked.status_code, 403)
-        self.assertIn("沒有權限。", blocked.text)
+        opened_delete = debbie.get(f"/submission/{customer_id}/delete")
+        self.assertEqual(opened_delete.status_code, 200)
+        self.assertIn("這筆提交已經刪除", opened_delete.text)
+        self.assertNotIn("沒有權限。", opened_delete.text)
 
     def test_staff_can_view_and_download_but_not_mutate(self) -> None:
         name = self._name()
@@ -320,7 +321,8 @@ class CustomerRosterTests(unittest.TestCase):
                 self.assertIn(name, page.text)
                 self.assertIn(phone, page.text)
                 self.assertIn("尚缺", page.text)
-                self.assertNotIn(f"/customers/c0000bb01/edit", page.text)
+                self.assertIn("批量刪除", page.text)
+                self.assertIn('value="c0000bb01"', page.text)
                 found = client.get(f"/customers?q={phone.replace('-', '')}")
                 self.assertIn(name, found.text)
                 self.assertNotIn(missing_name, found.text)
@@ -334,9 +336,10 @@ class CustomerRosterTests(unittest.TestCase):
                 self.assertEqual(detail.status_code, 200)
                 self.assertIn(phone, detail.text)
                 self.assertIn(submission, detail.text)
-                self.assertNotIn("/confirm", detail.text)
-                self.assertNotIn("/edit", detail.text)
-                self.assertNotIn("/delete", detail.text)
+                self.assertIn("/customers/c0000bb01/confirm", detail.text)
+                self.assertIn("/customers/c0000bb01/edit", detail.text)
+                self.assertIn("/customers/c0000bb01/delete", detail.text)
+                self.assertNotIn("沒有權限。", detail.text)
                 downloaded = client.get("/customers/roster.xlsx")
                 self.assertEqual(downloaded.status_code, 200)
                 sheet = self._sheet(downloaded.content)
@@ -344,39 +347,64 @@ class CustomerRosterTests(unittest.TestCase):
                 self.assertIn(phone, sheet)
                 self.assertIn("尚缺", sheet)
                 self.assertNotIn(self.passwords[username].encode("utf-8"), downloaded.content)
-                for path in (
-                    "/customers/c0000bb01/confirm",
-                    "/customers/c0000bb01/edit",
-                    "/customers/c0000bb01/delete",
+                for path, phrase in (
+                    ("/customers/c0000bb01/confirm", CONFIRM),
+                    ("/customers/c0000bb01/edit", EDIT_CONFIRM),
+                    ("/customers/c0000bb01/delete", DELETE_CONFIRM),
                 ):
-                    blocked_get = client.get(path)
-                    self.assertEqual(blocked_get.status_code, 403, path)
-                    self.assertIn("沒有權限。", blocked_get.text)
-                    self.assertNotIn(CONFIRM, blocked_get.text)
-                    self.assertNotIn(EDIT_CONFIRM, blocked_get.text)
-                    self.assertNotIn(DELETE_CONFIRM, blocked_get.text)
-                    blocked_post = client.post(
+                    opened = client.get(path)
+                    self.assertEqual(opened.status_code, 200, path)
+                    self.assertIn(phrase, opened.text)
+                    self.assertNotIn("沒有權限。", opened.text)
+                    rejected = client.post(
                         path,
                         data={
-                            "csrf": _csrf(page.text),
-                            "confirm": CONFIRM,
+                            "csrf": _csrf(opened.text),
+                            "confirm": "先不要",
                             "phone_choice": phone,
                             "name": name,
-                            "phone": self._phone(),
-                            "note": "不可以改",
+                            "phone": phone,
+                            "note": "先不要改",
                         },
                     )
-                    self.assertEqual(blocked_post.status_code, 403, path)
-                    self.assertIn("沒有權限。", blocked_post.text)
+                    self.assertEqual(rejected.status_code, 400, path)
                 self.assertEqual(self._roster_bytes(), before)
 
-        with self.assertRaises(PermissionError):
-            app_module.storage.confirm_customer("Debbie", "c0000bb01", phone)
-        with self.assertRaises(PermissionError):
-            app_module.storage.edit_customer("Taya", "c0000bb01", name, phone, "不可以")
-        with self.assertRaises(PermissionError):
-            app_module.storage.delete_customer("Katherine", "c0000bb01")
-        self.assertEqual(self._roster_bytes(), before)
+        debbie = self._login("Debbie")
+        confirmed = debbie.post(
+            "/customers/c0000bb01/confirm",
+            data={
+                "csrf": _csrf(debbie.get("/customers/c0000bb01/confirm").text),
+                "confirm": CONFIRM,
+                "phone_choice": phone,
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(confirmed.status_code, 303, confirmed.text)
+        confirmed_row = next(row for row in self._roster()["customers"] if row["id"] == "c0000bb01")
+        self.assertEqual(confirmed_row["status"], "ok")
+        self.assertEqual(confirmed_row["confirmed_by"], "Debbie")
+        self.assertEqual(confirmed_row["phone"], phone)
+        katherine = self._login("Katherine")
+        removed = katherine.post(
+            "/customers/c0000bb02/delete",
+            data={
+                "csrf": _csrf(katherine.get("/customers/c0000bb02/delete").text),
+                "confirm": DELETE_CONFIRM,
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(removed.status_code, 303, removed.text)
+        stored = self._roster()
+        self.assertNotIn("c0000bb02", [row["id"] for row in stored["customers"]])
+        self.assertEqual(stored["deleted"][-1]["deleted_by"], "Katherine")
+        self.assertEqual(stored["deleted"][-1]["name"], missing_name)
+        revived = merge_rosters(
+            stored,
+            {"customers": [{"id": "c0000bb02", "name": missing_name, "phone": "0000-9999"}]},
+        )
+        self.assertNotIn("c0000bb02", [row["id"] for row in revived["customers"]])
+        self.assertIn("c0000bb01", [row["id"] for row in revived["customers"]])
 
     def test_super_admin_confirm_and_edit_require_phrase_and_csrf(self) -> None:
         name = self._name()

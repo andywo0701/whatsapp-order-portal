@@ -34,6 +34,11 @@ def role_of(username: str) -> str | None:
     return STAFF.get(username)
 
 
+def can_manage(username: str | None) -> bool:
+    """Operational access for Super Admin and Admin. Customers are not staff."""
+    return STAFF.get(username or "") in {"super_admin", "admin"}
+
+
 def secrets_equal(left: str, right: str) -> bool:
     a = left.encode("utf-8")
     b = right.encode("utf-8")
@@ -162,7 +167,7 @@ def reset_admin_password(
     confirm: str,
     existing: dict[str, Any] | None,
 ) -> tuple[str | None, dict[str, Any] | None]:
-    if STAFF.get(actor) != "super_admin":
+    if not can_manage(actor):
         return "沒有權限。", None
     if target not in STAFF or STAFF.get(target) != "admin" or target == actor:
         return "只能為其他管理員設定密碼。", None

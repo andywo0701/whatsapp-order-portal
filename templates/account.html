@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}帳戶｜落單上載{% endblock %}
+{% block title %}帳戶｜ThreeGoodies 落單上載{% endblock %}
 {% block content %}
 <p class="crumb"><a href="/">返回上載</a></p>
 {% if notice %}<p class="alert ok">{{ notice }}</p>{% endif %}
@@ -28,7 +28,7 @@
 {% if staff %}
 <section class="card">
   <h2>幫同事設定密碼</h2>
-  <p class="muted">Super Admin 可以為 Debbie、Taya 或 Katherine 設定新密碼。請私下告知對方，不要把密碼寫在公開地方。</p>
+  <p class="muted">你可以為其他管理員設定新密碼。這個表格不能改自己的密碼。請私下告知對方，不要把密碼寫在公開地方。</p>
   {% if reset_error %}<p class="alert" role="alert">{{ reset_error }}</p>{% endif %}
   <ul class="people">
     {% for person in staff %}

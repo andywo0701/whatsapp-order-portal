@@ -1,11 +1,14 @@
 {% extends "base.html" %}
-{% block title %}歡迎回來｜落單上載{% endblock %}
+{% block title %}歡迎回來｜ThreeGoodies 落單上載{% endblock %}
 {% block content %}
 {% if notice == "submitted" %}
 <p class="alert ok">已收到你的上載，處理好的 Excel 會放回這裡。</p>
 {% endif %}
 {% if notice == "deleted" %}
 <p class="alert ok">已刪除此提交，近期列表不會再顯示。</p>
+{% endif %}
+{% if notice == "bulk-deleted" %}
+<p class="alert ok">已刪除所選提交，近期列表不會再顯示。</p>
 {% endif %}
 {% if notice == "scan-sent" %}
 <p class="alert ok">已發出掃描要求，做好會把 Excel 放回這裡。</p>
@@ -97,24 +100,41 @@
 <section class="card">
   <h2>近期提交</h2>
   {% if items %}
-  <ul class="feed">
-    {% for item in items %}
-    <li class="feed-row">
-      <a class="feed-link" href="/submission/{{ item.id }}">
-        <span class="feed-top">
-          <span class="feed-title">{{ item.kind }}</span>
-          <span class="tag tag-purpose-{{ item.purpose }}">{{ item.purpose_label }}</span>
-          <span class="tag tag-{{ item.status }}">{{ item.status_label }}</span>
-        </span>
-        <span class="feed-meta">{{ item.submitted_display }} · {{ item.files|length }} 個檔案{% if item.result_files %} · 結果 {{ item.result_files|length }} 個{% endif %}</span>
-        <span class="feed-date{% if not item.record_date_label %} is-empty{% endif %}">{% if item.record_date_label %}紀錄 {{ item.record_date_label }}{% else %}未指定日期{% endif %}</span>
-      </a>
-      {% if role == "super_admin" %}
-      <a class="btn quiet-danger feed-delete" href="/submission/{{ item.id }}/delete">刪除</a>
-      {% endif %}
-    </li>
-    {% endfor %}
-  </ul>
+  <form method="post" action="/submissions/bulk-delete" class="bulk-form">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    {% if can_manage %}
+    <div class="bulk-bar">
+      <label class="bulk-check">
+        <input type="checkbox" data-select-all>
+        全選這頁
+      </label>
+      <button type="submit" class="btn quiet-danger">批量刪除</button>
+    </div>
+    {% endif %}
+    <ul class="feed">
+      {% for item in items %}
+      <li class="feed-row">
+        {% if can_manage %}
+        <label class="row-check">
+          <input type="checkbox" name="ids" value="{{ item.id }}" aria-label="選擇 {{ item.kind }}">
+        </label>
+        {% endif %}
+        <a class="feed-link" href="/submission/{{ item.id }}">
+          <span class="feed-top">
+            <span class="feed-title">{{ item.kind }}</span>
+            <span class="tag tag-purpose-{{ item.purpose }}">{{ item.purpose_label }}</span>
+            <span class="tag tag-{{ item.status }}">{{ item.status_label }}</span>
+          </span>
+          <span class="feed-meta">{{ item.submitted_display }} · {{ item.files|length }} 個檔案{% if item.result_files %} · 結果 {{ item.result_files|length }} 個{% endif %}</span>
+          <span class="feed-date{% if not item.record_date_label %} is-empty{% endif %}">{% if item.record_date_label %}紀錄 {{ item.record_date_label }}{% else %}未指定日期{% endif %}</span>
+        </a>
+        {% if can_manage %}
+        <a class="btn quiet-danger feed-delete" href="/submission/{{ item.id }}/delete">刪除</a>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </form>
   {% else %}
   <p class="muted quiet">還沒有提交。需要時再上載就可以了。</p>
   {% endif %}

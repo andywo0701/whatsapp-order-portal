@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}顧客名冊｜落單上載{% endblock %}
+{% block title %}顧客名冊｜ThreeGoodies 落單上載{% endblock %}
 {% block content %}
 <p class="crumb"><a href="/">返回上載</a></p>
 {% if notice %}<p class="alert ok">{{ notice }}</p>{% endif %}
@@ -33,20 +33,39 @@
   <p class="muted quiet">還沒有顧客名冊。請在上載頁選擇「客戶資料」，上載 WhatsApp 聯絡人截圖或含電話的對話。掃描完成後，名冊會出現在這裡。這個網站不會從圖片讀取姓名或電話。</p>
   <p class="back"><a class="btn ghost" href="/?purpose=customers#upload-purpose">去上載客戶資料</a></p>
   {% elif rows %}
-  <ul class="feed">
-    {% for row in rows %}
-    <li>
-      <a class="feed-link" href="/customers/{{ row.id }}">
-        <span class="feed-top">
-          <span class="feed-title">{{ row.name_display }}</span>
-          <span class="tag tag-{{ row.status }}">{{ row.status_label }}</span>
-        </span>
-        <span class="feed-meta">電話 {% if row.phone_missing %}<span class="phone-missing">尚缺</span>{% else %}{{ row.phone_display }}{% endif %}</span>
-        <span class="feed-date{% if row.phone_source_label == '尚缺' %} is-empty{% endif %}">{{ row.phone_source_label }} · {{ row.updated_display }}</span>
-      </a>
-    </li>
-    {% endfor %}
-  </ul>
+  <form method="post" action="/customers/bulk-delete" class="bulk-form">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="q" value="{{ query }}">
+    <input type="hidden" name="filter" value="{{ roster_filter }}">
+    {% if can_manage %}
+    <div class="bulk-bar">
+      <label class="bulk-check">
+        <input type="checkbox" data-select-all>
+        全選這頁
+      </label>
+      <button type="submit" class="btn quiet-danger">批量刪除</button>
+    </div>
+    {% endif %}
+    <ul class="feed">
+      {% for row in rows %}
+      <li class="feed-row">
+        {% if can_manage %}
+        <label class="row-check">
+          <input type="checkbox" name="ids" value="{{ row.id }}" aria-label="選擇 {{ row.name_display }}">
+        </label>
+        {% endif %}
+        <a class="feed-link" href="/customers/{{ row.id }}">
+          <span class="feed-top">
+            <span class="feed-title">{{ row.name_display }}</span>
+            <span class="tag tag-{{ row.status }}">{{ row.status_label }}</span>
+          </span>
+          <span class="feed-meta">電話 {% if row.phone_missing %}<span class="phone-missing">尚缺</span>{% else %}{{ row.phone_display }}{% endif %}</span>
+          <span class="feed-date{% if row.phone_source_label == '尚缺' %} is-empty{% endif %}">{{ row.phone_source_label }} · {{ row.updated_display }}</span>
+        </a>
+      </li>
+      {% endfor %}
+    </ul>
+  </form>
   {% else %}
   <p class="muted quiet">沒有符合的顧客。</p>
   {% endif %}

@@ -121,6 +121,7 @@ class StaffAuthTests(unittest.TestCase):
         home = andy.get("/")
         self.assertEqual(home.status_code, 200)
         self.assertIn("歡迎回來", home.text)
+        self.assertIn("ThreeGoodies 落單上載", home.text)
         self.assertIn("超級管理員", home.text)
         self.assertIn("Super Admin", home.text)
         self.assertNotIn(andy_password, home.text)
@@ -209,18 +210,38 @@ class StaffAuthTests(unittest.TestCase):
         debbie_account = debbie.get("/account")
         self.assertIn("管理員", debbie_account.text)
         self.assertIn("Admin", debbie_account.text)
-        self.assertNotIn("幫同事設定密碼", debbie_account.text)
-        forbidden = debbie.post(
+        self.assertIn("幫同事設定密碼", debbie_account.text)
+        self.assertIn("Taya", debbie_account.text)
+        self.assertIn("Katherine", debbie_account.text)
+        self.assertNotIn('value="Debbie"', debbie_account.text)
+        self.assertNotIn('value="Andy"', debbie_account.text)
+        taya_reset = _password()
+        reset_taya = debbie.post(
             "/account/reset",
             data={
-                "csrf": _csrf(debbie.get("/account").text),
+                "csrf": _csrf(debbie_account.text),
                 "target": "Taya",
-                "new_password": _password(),
-                "confirm_password": _password(),
+                "new_password": taya_reset,
+                "confirm_password": taya_reset,
             },
+            follow_redirects=False,
         )
-        self.assertEqual(forbidden.status_code, 403)
-        self.assertIn("沒有權限", forbidden.text)
+        self.assertEqual(reset_taya.status_code, 303)
+        self.assertNotIn(taya_reset, reset_taya.headers["location"])
+        self.assertEqual(self._login(TestClient(app_module.app), "Taya", taya_reset).status_code, 303)
+        for blocked_target in ("Debbie", "Andy"):
+            blocked_reset = debbie.post(
+                "/account/reset",
+                data={
+                    "csrf": _csrf(debbie.get("/account").text),
+                    "target": blocked_target,
+                    "new_password": _password(),
+                    "confirm_password": _password(),
+                },
+            )
+            self.assertEqual(blocked_reset.status_code, 400)
+            self.assertIn("只能為其他管理員設定密碼", blocked_reset.text)
+        self.assertEqual(andy.get("/account").status_code, 200)
 
         self_reset = andy.post(
             "/account/reset",
@@ -256,6 +277,8 @@ class StaffAuthTests(unittest.TestCase):
         client = TestClient(app_module.app)
         page = client.get("/login")
         self.assertIn("歡迎回來", page.text)
+        self.assertIn("ThreeGoodies 落單上載", page.text)
+        self.assertIn(">3<", page.text)
         self.assertNotIn("#1f4e79", Path("static/style.css").read_text(encoding="utf-8"))
         bad = client.post(
             "/login",
