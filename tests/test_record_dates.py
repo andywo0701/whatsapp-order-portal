@@ -140,8 +140,12 @@ class RecordDateTests(unittest.TestCase):
         self.assertNotRegex(home.text, r'name="record_date_start"[^>]*required')
         self.assertNotRegex(home.text, r'name="record_date_end"[^>]*required')
         self.assertRegex(home.text, r'name="files"[^>]*required')
-        self.assertEqual(app_module.MAX_FILE_BYTES, 40 * 1024 * 1024)
-        self.assertEqual(app_module.MAX_TOTAL_BYTES, 80 * 1024 * 1024)
+        self.assertGreaterEqual(app_module.MAX_FILE_BYTES, 500 * 1024 * 1024)
+        self.assertEqual(app_module.MAX_FILE_BYTES, 4 * 1024 * 1024 * 1024)
+        self.assertEqual(app_module.MAX_TOTAL_BYTES, 4 * 1024 * 1024 * 1024)
+        self.assertIn(app_module.UPLOAD_LIMIT_HINT, home.text)
+        self.assertNotIn("40MB", home.text)
+        self.assertNotIn("80MB", home.text)
 
     def test_blank_dates_are_omitted_and_labeled(self) -> None:
         sub_id = self._submit({"record_mode": ""})

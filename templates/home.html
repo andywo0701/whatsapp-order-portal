@@ -19,9 +19,9 @@
 <section class="card">
   <p class="eyebrow">{{ role_label }} · {{ role_title }}</p>
   <h1>歡迎回來</h1>
-  <p class="muted">{{ user }}，把檔案交給我們就可以。上載用途預設是自動分辨，只看檔名和副檔名，不會從圖片讀取姓名、電話或價錢。也可以選擇這些紀錄屬於哪一天。單檔上限 40MB，一次最多 80MB。</p>
+  <p class="muted">{{ user }}，把檔案交給我們就可以。上載用途預設是自動分辨，只看檔名和副檔名，不會從圖片讀取姓名、電話或價錢。也可以選擇這些紀錄屬於哪一天。{{ upload_limit_hint }}</p>
   <p class="hint"><a href="/customers">查看顧客名冊</a> · <a href="/catalog">查看貨品清單</a></p>
-  <form method="post" action="/submit" enctype="multipart/form-data" class="stack">
+  <form id="upload-form" method="post" action="/submit" enctype="multipart/form-data" class="stack" data-chunk-bytes="{{ chunk_bytes }}">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     {% set mode = form_mode|default('', true) %}
     {% set purpose = form_purpose|default('auto', true) %}
@@ -84,6 +84,13 @@
     <label>檔案
       <input type="file" name="files" multiple required accept=".jpg,.jpeg,.png,.webp,.gif,.heic,.heif,.pdf,.txt,.zip,.xlsx,.xls,.csv,.doc,.docx,image/*">
     </label>
+    <div id="upload-progress" class="upload-progress" hidden>
+      <p class="hint" id="upload-progress-label">正在分段上載…</p>
+      <div id="upload-progress-track" class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-labelledby="upload-progress-label">
+        <div id="upload-progress-fill" class="progress-fill"></div>
+      </div>
+    </div>
+    <p id="upload-error" class="alert" hidden role="alert"></p>
     <button type="submit" class="btn primary">提交上載</button>
   </form>
 </section>
@@ -119,18 +126,20 @@
           <input type="checkbox" name="ids" value="{{ item.id }}" aria-label="選擇 {{ item.kind }}">
         </label>
         {% endif %}
-        <a class="feed-link" href="/submission/{{ item.id }}">
-          <span class="feed-top">
-            <span class="feed-title">{{ item.kind }}</span>
-            <span class="tag tag-purpose-{{ item.purpose }}">{{ item.purpose_label }}</span>
-            <span class="tag tag-{{ item.status }}">{{ item.status_label }}</span>
-          </span>
-          <span class="feed-meta">{{ item.submitted_display }} · {{ item.files|length }} 個檔案{% if item.result_files %} · 結果 {{ item.result_files|length }} 個{% endif %}</span>
-          <span class="feed-date{% if not item.record_date_label %} is-empty{% endif %}">{% if item.record_date_label %}紀錄 {{ item.record_date_label }}{% else %}未指定日期{% endif %}</span>
-        </a>
-        {% if can_manage %}
-        <a class="btn quiet-danger feed-delete" href="/submission/{{ item.id }}/delete">刪除</a>
-        {% endif %}
+        <div class="feed-card">
+          <a class="feed-link" href="/submission/{{ item.id }}">
+            <span class="feed-top">
+              <span class="feed-title">{{ item.kind }}</span>
+              <span class="tag tag-purpose-{{ item.purpose }}">{{ item.purpose_label }}</span>
+              <span class="tag tag-{{ item.status }}">{{ item.status_label }}</span>
+            </span>
+            <span class="feed-meta">{{ item.submitted_display }} · {{ item.files|length }} 個檔案{% if item.result_files %} · 結果 {{ item.result_files|length }} 個{% endif %}</span>
+            <span class="feed-date{% if not item.record_date_label %} is-empty{% endif %}">{% if item.record_date_label %}紀錄 {{ item.record_date_label }}{% else %}未指定日期{% endif %}</span>
+          </a>
+          {% if can_manage %}
+          <a class="btn quiet-danger feed-delete" href="/submission/{{ item.id }}/delete">刪除</a>
+          {% endif %}
+        </div>
       </li>
       {% endfor %}
     </ul>
@@ -139,4 +148,5 @@
   <p class="muted quiet">還沒有提交。需要時再上載就可以了。</p>
   {% endif %}
 </section>
+<script src="/static/upload.js"></script>
 {% endblock %}

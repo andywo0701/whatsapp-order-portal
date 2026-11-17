@@ -4,7 +4,11 @@ import json
 import os
 import re
 import secrets
+import shutil
+import sys
 import tempfile
+import threading
+import time
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -49,6 +53,13 @@ SAFE_NAME = re.compile(r"^[A-Za-z0-9._\u4e00-\u9fff\-()+ ]+$")
 ISO_DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 ACCOUNTS_REPO_PATH = "users/accounts.json"
 KIND_PENDING = "待判斷"
+CHUNK_TTL_SECONDS = 24 * 60 * 60
+INLINE_PUBLISH_BYTES = 80 * 1024 * 1024
+_UPLOAD_ID = re.compile(r"^[a-f0-9]{32}$")
+
+
+class ChunkUploadError(ValueError):
+    """A chunked upload the page can explain to staff."""
 # Posted by older forms, or later by the scanning bot. The upload form no longer asks.
 LEGACY_KINDS = {"新單", "改單", "取消", "已改", "已取消", "聯絡人截圖", "其他", KIND_PENDING}
 
@@ -139,6 +150,9 @@ class Storage:
         self._api: HfApi | None = None
         self._ensured = False
         self._password_records: dict[str, dict[str, Any]] | None = None
+        self._chunk_guard = threading.Lock()
+        self._chunk_locks: dict[str, threading.Lock] = {}
+        self._publish_lock = threading.Lock()
 
     def is_ready(self) -> bool:
         return bool(self.repo_id and self.token)
@@ -186,6 +200,35 @@ class Storage:
         record_date_end: str | None = None,
         purpose: str | None = None,
     ) -> str:
+        return self._create_submission(
+            user, kind, note, list(files), record_date_start, record_date_end, purpose
+        )
+
+    def create_submission_from_paths(
+        self,
+        user: str,
+        kind: str,
+        note: str,
+        files: list[tuple[str, Path]],
+        record_date_start: str | None = None,
+        record_date_end: str | None = None,
+        purpose: str | None = None,
+    ) -> str:
+        """Move files into the inbox without reading them into memory."""
+        return self._create_submission(
+            user, kind, note, list(files), record_date_start, record_date_end, purpose
+        )
+
+    def _create_submission(
+        self,
+        user: str,
+        kind: str,
+        note: str,
+        files: list[tuple[str, bytes | Path]],
+        record_date_start: str | None,
+        record_date_end: str | None,
+        purpose: str | None,
+    ) -> str:
         # Validate before creating a folder so a bad window never becomes a submission.
         start, end = canonical_record_dates(record_date_start, record_date_end)
         chosen_purpose = canonical_purpose(purpose)
@@ -195,7 +238,8 @@ class Storage:
         used: set[str] = set()
         stored_names: list[str] = []
         local = self._local_dir(sub_id)
-        for original, data in files:
+        total = 0
+        for original, source in files:
             name = Path(original).name
             stem, ext = Path(name).stem, Path(name).suffix
             candidate = name
@@ -204,7 +248,7 @@ class Storage:
                 candidate = f"{stem}_{i}{ext}"
                 i += 1
             used.add(candidate.lower())
-            (local / "files" / candidate).write_bytes(data)
+            total += self._place_upload(source, local / "files" / candidate)
             stored_names.append(candidate)
         manifest = {
             "id": sub_id,
@@ -225,10 +269,46 @@ class Storage:
         (local / "manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        self.ensure_repo()
-        if self.is_ready():
-            self._upload_submission(sub_id, local)
+        os.chmod(local / "manifest.json", 0o600)
+        self._schedule_publish(sub_id, local, total)
         return sub_id
+
+    def _place_upload(self, source: bytes | Path, dest: Path) -> int:
+        """Put source at dest. A path is moved or streamed, never read whole."""
+        if isinstance(source, (bytes, bytearray)):
+            dest.write_bytes(source)
+            os.chmod(dest, 0o600)
+            return len(source)
+        src = Path(source)
+        try:
+            os.replace(src, dest)
+        except OSError:
+            with src.open("rb") as incoming, dest.open("wb") as outgoing:
+                shutil.copyfileobj(incoming, outgoing, 1024 * 1024)
+            src.unlink(missing_ok=True)
+        os.chmod(dest, 0o600)
+        return dest.stat().st_size
+
+    def _schedule_publish(self, sub_id: str, local: Path, total_bytes: int) -> None:
+        if not self.is_ready():
+            return
+        self.ensure_repo()
+        if total_bytes <= INLINE_PUBLISH_BYTES:
+            self._upload_submission(sub_id, local)
+            return
+        threading.Thread(
+            target=self._publish_quiet,
+            args=(sub_id,),
+            name=f"publish-{sub_id}",
+            daemon=True,
+        ).start()
+
+    def _publish_quiet(self, sub_id: str) -> None:
+        try:
+            with self._publish_lock:
+                self._upload_submission(sub_id, self._local_dir(sub_id))
+        except Exception:
+            sys.stderr.write(f"Dataset publish failed for {sub_id}.\n")
 
     def _upload_submission(self, sub_id: str, local: Path) -> None:
         api = self._api_client()
@@ -243,12 +323,217 @@ class Storage:
         for path in sorted((local / "files").iterdir()):
             if path.is_file():
                 api.upload_file(
-                    path_or_fileobj=path.read_bytes(),
+                    path_or_fileobj=str(path.resolve()),
                     path_in_repo=f"{prefix}/files/{path.name}",
                     repo_id=self.repo_id,
                     repo_type="dataset",
                     commit_message=f"Add file for {sub_id}",
                 )
+
+    def cleanup_chunk_uploads(self, now: float | None = None) -> None:
+        """Delete incomplete chunk sessions that have expired."""
+        root = self.local_root / ".chunk-uploads"
+        if not root.is_dir():
+            return
+        moment = time.time() if now is None else now
+        for child in list(root.iterdir()):
+            if not child.is_dir():
+                continue
+            expired = True
+            meta_path = child / "meta.json"
+            if meta_path.is_file():
+                try:
+                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                    created = float(meta.get("created_at") or 0)
+                    expired = moment - created > CHUNK_TTL_SECONDS
+                except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                    expired = True
+            if expired:
+                shutil.rmtree(child, ignore_errors=True)
+
+    def begin_chunk_upload(
+        self,
+        user: str,
+        *,
+        note: str,
+        kind: str,
+        purpose: str,
+        record_start: str | None,
+        record_end: str | None,
+        files: list[dict[str, Any]],
+        chunk_bytes: int,
+        max_file_bytes: int,
+        max_total_bytes: int,
+        max_files: int,
+        file_too_big: str,
+        total_too_big: str,
+    ) -> dict[str, Any]:
+        self.cleanup_chunk_uploads()
+        if not files:
+            raise ChunkUploadError("請至少選擇一個檔案。")
+        if len(files) > max_files:
+            raise ChunkUploadError(f"一次最多 {max_files} 個檔案。")
+        total = 0
+        normalized: list[dict[str, Any]] = []
+        for item in files:
+            name = item.get("name")
+            size = item.get("size")
+            if not isinstance(name, str) or not name or not isinstance(size, int) or isinstance(size, bool):
+                raise ChunkUploadError("檔案資料不正確。")
+            if size <= 0:
+                raise ChunkUploadError("請至少選擇一個有內容的檔案。")
+            if size > max_file_bytes:
+                raise ChunkUploadError(file_too_big.format(name=name))
+            total += size
+            if total > max_total_bytes:
+                raise ChunkUploadError(total_too_big)
+            normalized.append({"name": name, "size": size, "received": []})
+        upload_id = secrets.token_hex(16)
+        folder = self._chunk_dir(upload_id)
+        folder.mkdir(parents=True, exist_ok=False)
+        (folder / "parts").mkdir()
+        meta = {
+            "id": upload_id,
+            "user": user,
+            "created_at": time.time(),
+            "note": note,
+            "kind": kind,
+            "purpose": purpose,
+            "record_start": record_start,
+            "record_end": record_end,
+            "chunk_bytes": int(chunk_bytes),
+            "files": normalized,
+        }
+        self._write_chunk_meta(folder, meta)
+        return self._public_chunk_status(meta)
+
+    def chunk_status(self, user: str, upload_id: str) -> dict[str, Any]:
+        _folder, meta = self._load_chunk_meta(user, upload_id)
+        return self._public_chunk_status(meta)
+
+    def chunk_write_plan(self, user: str, upload_id: str, file_index: int, index: int) -> dict[str, Any]:
+        folder, meta = self._load_chunk_meta(user, upload_id)
+        spec = self._chunk_spec(meta, file_index, index)
+        return {
+            "path": folder / "parts" / f"{file_index}.part",
+            "offset": spec["offset"],
+            "expected": spec["expected"],
+        }
+
+    def mark_chunk(self, user: str, upload_id: str, file_index: int, index: int) -> dict[str, Any]:
+        with self._lock_for(upload_id):
+            folder, meta = self._load_chunk_meta(user, upload_id)
+            spec = self._chunk_spec(meta, file_index, index)
+            part = folder / "parts" / f"{file_index}.part"
+            if not part.is_file() or part.stat().st_size < spec["offset"] + spec["expected"]:
+                raise ChunkUploadError("這一段不完整，請再試。")
+            received = meta["files"][file_index]["received"]
+            if index not in received:
+                received.append(index)
+                received.sort()
+            self._write_chunk_meta(folder, meta)
+            return self._public_chunk_status(meta)
+
+    def finish_chunk_upload(self, user: str, upload_id: str) -> str:
+        with self._lock_for(upload_id):
+            folder, meta = self._load_chunk_meta(user, upload_id)
+            sources: list[tuple[str, Path]] = []
+            for file_index, spec in enumerate(meta["files"]):
+                size = int(spec["size"])
+                chunk_bytes = int(meta["chunk_bytes"])
+                count = (size + chunk_bytes - 1) // chunk_bytes
+                if list(spec.get("received") or []) != list(range(count)):
+                    raise ChunkUploadError("上載尚未完成，請再試一次。")
+                part = folder / "parts" / f"{file_index}.part"
+                if not part.is_file() or part.stat().st_size != size:
+                    raise ChunkUploadError("上載尚未完成，請再試一次。")
+                sources.append((str(spec["name"]), part))
+            sub_id = self.create_submission_from_paths(
+                user=user,
+                kind=str(meta.get("kind") or ""),
+                note=str(meta.get("note") or ""),
+                files=sources,
+                record_date_start=meta.get("record_start"),
+                record_date_end=meta.get("record_end"),
+                purpose=str(meta.get("purpose") or ""),
+            )
+            shutil.rmtree(folder, ignore_errors=True)
+            return sub_id
+
+    def _chunk_spec(self, meta: dict[str, Any], file_index: int, index: int) -> dict[str, int]:
+        files = meta.get("files")
+        if not isinstance(files, list) or file_index < 0 or file_index >= len(files):
+            raise ChunkUploadError("找不到這個檔案。")
+        spec = files[file_index]
+        size = int(spec["size"])
+        chunk_bytes = int(meta["chunk_bytes"])
+        if chunk_bytes < 1:
+            raise ChunkUploadError("這一段不屬於這個檔案。")
+        count = (size + chunk_bytes - 1) // chunk_bytes
+        if index < 0 or index >= count:
+            raise ChunkUploadError("這一段不屬於這個檔案。")
+        offset = index * chunk_bytes
+        expected = min(chunk_bytes, size - offset)
+        return {"offset": offset, "expected": expected}
+
+    def _chunk_dir(self, upload_id: str) -> Path:
+        if not _UPLOAD_ID.fullmatch(upload_id):
+            raise ChunkUploadError("找不到這次上載。")
+        root = (self.local_root / ".chunk-uploads").resolve()
+        folder = (root / upload_id).resolve()
+        if folder.parent != root:
+            raise ChunkUploadError("找不到這次上載。")
+        return folder
+
+    def _load_chunk_meta(self, user: str, upload_id: str) -> tuple[Path, dict[str, Any]]:
+        folder = self._chunk_dir(upload_id)
+        path = folder / "meta.json"
+        if not path.is_file():
+            raise ChunkUploadError("找不到這次上載。")
+        try:
+            meta = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ChunkUploadError("找不到這次上載。") from exc
+        if not isinstance(meta, dict) or meta.get("user") != user:
+            raise ChunkUploadError("找不到這次上載。")
+        try:
+            created = float(meta.get("created_at") or 0)
+        except (TypeError, ValueError) as exc:
+            raise ChunkUploadError("找不到這次上載。") from exc
+        if time.time() - created > CHUNK_TTL_SECONDS:
+            shutil.rmtree(folder, ignore_errors=True)
+            raise ChunkUploadError("這次上載已過期，請重新選擇檔案。")
+        return folder, meta
+
+    def _write_chunk_meta(self, folder: Path, meta: dict[str, Any]) -> None:
+        self._replace_private(
+            folder / "meta.json",
+            json.dumps(meta, ensure_ascii=False).encode("utf-8"),
+        )
+
+    def _lock_for(self, upload_id: str) -> threading.Lock:
+        with self._chunk_guard:
+            lock = self._chunk_locks.get(upload_id)
+            if lock is None:
+                lock = threading.Lock()
+                self._chunk_locks[upload_id] = lock
+            return lock
+
+    def _public_chunk_status(self, meta: dict[str, Any]) -> dict[str, Any]:
+        chunk_bytes = int(meta["chunk_bytes"])
+        files = []
+        for spec in meta["files"]:
+            size = int(spec["size"])
+            count = (size + chunk_bytes - 1) // chunk_bytes if size else 0
+            files.append(
+                {
+                    "name": spec["name"],
+                    "size": size,
+                    "chunks": count,
+                    "received": list(spec.get("received") or []),
+                }
+            )
+        return {"id": meta["id"], "chunk_bytes": chunk_bytes, "files": files}
 
     def _load_local_manifest(self, sub_id: str) -> dict[str, Any] | None:
         path = self.local_root / sub_id / "manifest.json"

@@ -54,14 +54,16 @@
           <input type="checkbox" name="ids" value="{{ row.id }}" aria-label="選擇 {{ row.name_display }}">
         </label>
         {% endif %}
-        <a class="feed-link" href="/customers/{{ row.id }}">
-          <span class="feed-top">
-            <span class="feed-title">{{ row.name_display }}</span>
-            <span class="tag tag-{{ row.status }}">{{ row.status_label }}</span>
-          </span>
-          <span class="feed-meta">電話 {% if row.phone_missing %}<span class="phone-missing">尚缺</span>{% else %}{{ row.phone_display }}{% endif %}</span>
-          <span class="feed-date{% if row.phone_source_label == '尚缺' %} is-empty{% endif %}">{{ row.phone_source_label }} · {{ row.updated_display }}</span>
-        </a>
+        <div class="feed-card">
+          <a class="feed-link" href="/customers/{{ row.id }}">
+            <span class="feed-top">
+              <span class="feed-title">{{ row.name_display }}</span>
+              <span class="tag tag-{{ row.status }}">{{ row.status_label }}</span>
+            </span>
+            <span class="feed-meta">電話 {% if row.phone_missing %}<span class="phone-missing">尚缺</span>{% else %}{{ row.phone_display }}{% endif %}</span>
+            <span class="feed-date{% if row.phone_source_label == '尚缺' %} is-empty{% endif %}">{{ row.phone_source_label }} · {{ row.updated_display }}</span>
+          </a>
+        </div>
       </li>
       {% endfor %}
     </ul>

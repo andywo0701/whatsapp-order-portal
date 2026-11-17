@@ -303,6 +303,37 @@ class BulkDeleteTests(unittest.TestCase):
             app_module.storage.delete_customers("Guest", ["c0000bd03"])
         self.assertEqual(self._roster()["customers"][0]["phone"], "0000-3333")
 
+    def test_bulk_controls_stay_with_each_row(self) -> None:
+        self._submission(b"layout-file")
+        self._write_catalog(
+            [{"id": "p0000lay1", "name": "測試蘋果", "price": "HK$00.00", "note": ""}]
+        )
+        self._write_roster(
+            [{"id": "c0000lay1", "name": "測試顧客甲", "phone": "0000-1111", "phone_source": "conversation"}]
+        )
+        debbie = self._login("Debbie")
+        pages = {
+            "home": debbie.get("/").text,
+            "catalog": debbie.get("/catalog").text,
+            "customers": debbie.get("/customers").text,
+        }
+        for name, page in pages.items():
+            self.assertIn('class="bulk-form"', page, name)
+            self.assertRegex(page, r'class="bulk-bar"[\s\S]{0,500}全選這頁[\s\S]{0,300}批量刪除', name)
+            rows = re.findall(r'<li class="feed-row">(.*?)</li>', page, re.S)
+            self.assertTrue(rows, name)
+            for row in rows:
+                self.assertIn('class="row-check"', row)
+                self.assertIn('class="feed-card"', row)
+                self.assertLess(row.find("row-check"), row.find("feed-card"))
+        home_cards = re.findall(r'<div class="feed-card">(.*?)</div>', pages["home"], re.S)
+        self.assertTrue(home_cards)
+        self.assertTrue(all("feed-link" in card and "feed-delete" in card for card in home_cards))
+        css = (app_module.BASE_DIR / "static" / "style.css").read_text(encoding="utf-8")
+        self.assertIn(".bulk-form {\n  display: flex;", css)
+        self.assertIn(".feed-card > .feed-link", css)
+        self.assertNotIn("grid-column: 2", css)
+
     def _login(self, username: str) -> TestClient:
         client = TestClient(app_module.app)
         page = client.get("/login")

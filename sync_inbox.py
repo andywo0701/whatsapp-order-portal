@@ -8,7 +8,17 @@ import re
 import sys
 from pathlib import Path
 
-from huggingface_hub import HfApi, hf_hub_download, upload_file
+from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download, upload_file
+from huggingface_hub.errors import EntryNotFoundError, RepositoryNotFoundError
+
+from roster import (
+    ROSTER_JSON_PATH,
+    ROSTER_XLSX_PATH,
+    empty_document,
+    merge_rosters,
+    parse_roster_text,
+    roster_xlsx_bytes,
+)
 
 SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 DATASET_ID = os.environ.get("INBOX_DATASET", "Andyfatwo/whatsapp-order-inbox")
@@ -109,15 +119,28 @@ def publish_result(sub_id: str, files: list[Path], status: str, admin_note: str 
     )
 
 
-def publish_roster(roster_json: Path) -> None:
-    """Upload customers/roster.json. The portal merges it; it does not OCR.
+_LOOSE_PENDING = {"need_info", "待補資料"}
 
-    name and phone must be strings when present, so a phone keeps the characters
-    the scanner actually saw. The portal will not replace a known phone with a
-    blank, and it will not choose between two different phones for one name.
-    """
-    path = Path(roster_json)
-    data = json.loads(path.read_text(encoding="utf-8"))
+
+def _loosen_roster(data: dict) -> dict:
+    """Map the scanner's looser status words onto the roster schema."""
+    customers = data.get("customers")
+    if not isinstance(customers, list):
+        return data
+    for row in customers:
+        if not isinstance(row, dict):
+            continue
+        status = row.get("status")
+        if isinstance(status, str) and status.strip() in _LOOSE_PENDING:
+            row["status"] = "pending"
+        label = row.get("狀態")
+        if isinstance(label, str) and label.strip() in _LOOSE_PENDING:
+            row["狀態"] = "待確認"
+    return data
+
+
+def prepare_roster_payload(data: object) -> dict:
+    """Check a scanner roster and accept its slightly looser status values."""
     if not isinstance(data, dict) or not isinstance(data.get("customers"), list):
         raise ValueError("roster json must be an object with a customers list")
     for row in data["customers"]:
@@ -126,16 +149,62 @@ def publish_roster(roster_json: Path) -> None:
         for key in ("name", "phone"):
             if key in row and row[key] is not None and not isinstance(row[key], str):
                 raise ValueError(f"{key} must be a string")
+    return _loosen_roster(data)
+
+
+def load_official_roster(tok: str) -> dict:
+    """The roster already published for the website. Missing means empty.
+
+    Any other download failure is raised, so a publish cannot replace the
+    official files with only the scanner's new rows.
+    """
+    try:
+        got = hf_hub_download(
+            repo_id=DATASET_ID,
+            repo_type="dataset",
+            filename=ROSTER_JSON_PATH,
+            token=tok,
+        )
+    except (EntryNotFoundError, RepositoryNotFoundError):
+        return empty_document()
+    parsed = parse_roster_text(Path(got).read_text(encoding="utf-8"))
+    if parsed is None:
+        raise ValueError("official customers/roster.json is not usable JSON")
+    return parsed
+
+
+def publish_roster(roster_json: Path) -> None:
+    """Merge into the official roster and publish both website files.
+
+    The 顧客名冊 page reads only ``customers/roster.json`` (and the download
+    reads ``customers/roster.xlsx``). Putting 顧客名冊.xlsx under
+    ``inbox/{id}/results/`` does not update that list. Call this whenever the
+    scanner changes the customer roster.
+
+    The upload is one dataset commit of both files. If that commit fails, the
+    previous official roster is left unchanged. A blank phone does not erase a
+    known number. The same name with a different phone stays 待確認. Rows
+    already deleted stay deleted. ``need_info`` and ``待補資料`` are stored as
+    ``pending``. A missing id is assigned (``c`` plus hex).
+    """
+    path = Path(roster_json)
+    incoming = prepare_roster_payload(json.loads(path.read_text(encoding="utf-8")))
     tok = token()
-    upload_file(
-        path_or_fileobj=path.read_bytes(),
-        path_in_repo="customers/roster.json",
+    current = load_official_roster(tok)
+    merged = merge_rosters(current, incoming)
+    payload = json.dumps(merged, ensure_ascii=False, indent=2).encode("utf-8")
+    workbook = roster_xlsx_bytes(merged)
+    api = HfApi(token=tok)
+    api.create_commit(
         repo_id=DATASET_ID,
         repo_type="dataset",
-        token=tok,
+        operations=[
+            CommitOperationAdd(path_in_repo=ROSTER_JSON_PATH, path_or_fileobj=payload),
+            CommitOperationAdd(path_in_repo=ROSTER_XLSX_PATH, path_or_fileobj=workbook),
+        ],
         commit_message="Publish customer roster",
     )
-    print("Published customers/roster.json")
+    print("Published customers/roster.json and customers/roster.xlsx")
 
 
 def validate_catalog_payload(data: object) -> None:
