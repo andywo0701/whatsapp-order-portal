@@ -68,10 +68,11 @@ ALLOWED_EXT = {
 MAX_FILES = 40
 # A staff WhatsApp export must be accepted at 500MB, and a full backup is about 3GB.
 # 4GB is the per-file and per-submission cap. The page sends the file in CHUNK_BYTES pieces.
+# 2MB stays under a ~100s request limit at about 50KB/s (roughly 40s). 8MB pieces stalled.
 MIN_FILE_BYTES = 500 * 1024 * 1024
 MAX_FILE_BYTES = 4 * 1024 * 1024 * 1024
 MAX_TOTAL_BYTES = 4 * 1024 * 1024 * 1024
-CHUNK_BYTES = 8 * 1024 * 1024
+CHUNK_BYTES = 2 * 1024 * 1024
 FILE_CAP_LABEL = "4GB"
 UPLOAD_LIMIT_HINT = "單檔上限 4GB。較大的檔案會分成小段送出，完成前請留在這一頁。"
 _FILE_TOO_BIG = "「{name}」超過單檔 4GB 上限。"
@@ -664,7 +665,14 @@ async def upload_chunk(
         return _upload_json("這一段不屬於這個檔案。", 400)
     try:
         plan = storage.chunk_write_plan(user, upload_id, parsed_file, parsed_index)
-        await _write_chunk(chunk, plan["path"], plan["offset"], plan["expected"])
+        temporary = plan["path"].with_name(plan["path"].name + ".incoming")
+        try:
+            await _write_chunk(chunk, temporary, plan["expected"])
+            os.replace(temporary, plan["path"])
+            os.chmod(plan["path"], 0o600)
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
         status = storage.mark_chunk(user, upload_id, parsed_file, parsed_index)
     except ChunkUploadError as exc:
         return _upload_json(str(exc), 400)
@@ -702,14 +710,11 @@ def _small_int(value: str) -> int | None:
     return number
 
 
-async def _write_chunk(upload: UploadFile, dest: Path, offset: int, expected: int) -> None:
+async def _write_chunk(upload: UploadFile, dest: Path, expected: int) -> None:
+    """Stream one piece to its own file. The whole upload is not kept in memory."""
     dest.parent.mkdir(parents=True, exist_ok=True)
-    if not dest.exists():
-        dest.touch()
-        os.chmod(dest, 0o600)
     written = 0
-    with dest.open("r+b") as handle:
-        handle.seek(offset)
+    with dest.open("wb") as handle:
         while written < expected:
             block = await upload.read(min(1024 * 1024, expected - written))
             if not block:
