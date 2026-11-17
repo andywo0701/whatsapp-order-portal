@@ -4,13 +4,15 @@ import hmac
 import os
 import re
 import secrets
+import shutil
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -50,7 +52,7 @@ from roster import (
     present_customer,
 )
 from scan import mark_scan, post_scan, scan_is_limited
-from storage import Storage, parse_iso_date, record_date_text
+from storage import ChunkUploadError, Storage, parse_iso_date, record_date_text
 
 try:
     from dotenv import load_dotenv
@@ -64,8 +66,16 @@ ALLOWED_EXT = {
     ".pdf", ".txt", ".zip", ".xlsx", ".xls", ".csv", ".doc", ".docx",
 }
 MAX_FILES = 40
-MAX_FILE_BYTES = 40 * 1024 * 1024
-MAX_TOTAL_BYTES = 80 * 1024 * 1024
+# A staff WhatsApp export must be accepted at 500MB, and a full backup is about 3GB.
+# 4GB is the per-file and per-submission cap. The page sends the file in CHUNK_BYTES pieces.
+MIN_FILE_BYTES = 500 * 1024 * 1024
+MAX_FILE_BYTES = 4 * 1024 * 1024 * 1024
+MAX_TOTAL_BYTES = 4 * 1024 * 1024 * 1024
+CHUNK_BYTES = 8 * 1024 * 1024
+FILE_CAP_LABEL = "4GB"
+UPLOAD_LIMIT_HINT = "單檔上限 4GB。較大的檔案會分成小段送出，完成前請留在這一頁。"
+_FILE_TOO_BIG = "「{name}」超過單檔 4GB 上限。"
+_TOTAL_TOO_BIG = "今次上載總容量超過 4GB 上限。"
 DELETE_CONFIRM = "確定刪除此提交？"
 BULK_LIMIT = 200
 SELECT_FIRST = "請先選擇要刪除的項目。"
@@ -323,6 +333,8 @@ def _home_response(
             form_end=_echo_date(form_end),
             form_purpose=_form_purpose(form_purpose),
             record_date_hint=RECORD_DATE_HINT,
+            upload_limit_hint=UPLOAD_LIMIT_HINT,
+            chunk_bytes=CHUNK_BYTES,
         ),
         status_code=status_code,
     )
@@ -401,79 +413,315 @@ async def submit(
             form_end=record_date_end,
             form_purpose=echoed_purpose,
         )
-    saved: list[tuple[str, bytes]] = []
+    raw_length = request.headers.get("content-length", "")
+    if raw_length.isdigit() and int(raw_length) > MAX_TOTAL_BYTES + 2 * 1024 * 1024:
+        return _home_response(
+            request,
+            error=_TOTAL_TOO_BIG,
+            notice=None,
+            status_code=400,
+            form_mode=form_mode,
+            form_day=record_day,
+            form_start=record_date_start,
+            form_end=record_date_end,
+            form_purpose=echoed_purpose,
+        )
+    named = [upload for upload in files if upload.filename]
+    if len(named) > MAX_FILES:
+        return _home_response(
+            request,
+            error=f"一次最多 {MAX_FILES} 個檔案。",
+            notice=None,
+            status_code=400,
+            form_mode=form_mode,
+            form_day=record_day,
+            form_start=record_date_start,
+            form_end=record_date_end,
+            form_purpose=echoed_purpose,
+        )
+    incoming_root = storage.local_root / ".incoming"
+    incoming_root.mkdir(parents=True, exist_ok=True)
+    stage_dir = Path(tempfile.mkdtemp(prefix="in-", dir=incoming_root))
+    saved: list[tuple[str, Path]] = []
     total = 0
     errors: list[str] = []
-    for upload in files:
-        raw_name = upload.filename or ""
-        if not raw_name:
-            continue
-        name = _safe_filename(raw_name)
+    try:
+        for upload in named:
+            name = _safe_filename(upload.filename or "")
+            ext = Path(name).suffix.lower()
+            if ext not in ALLOWED_EXT:
+                errors.append(f"「{name}」檔案類型不允許。")
+                continue
+            dest = stage_dir / f"{len(saved):02d}.bin"
+            try:
+                size = await _stream_to_file(upload, dest, MAX_FILE_BYTES)
+            except _TooLarge:
+                errors.append(_FILE_TOO_BIG.replace("{name}", name))
+                break
+            if size <= 0:
+                dest.unlink(missing_ok=True)
+                continue
+            total += size
+            if total > MAX_TOTAL_BYTES:
+                errors.append(_TOTAL_TOO_BIG)
+                break
+            saved.append((name, dest))
+        if errors or not saved:
+            msg = "；".join(errors) if errors else "請至少選擇一個檔案。"
+            return _home_response(
+                request,
+                error=msg,
+                notice=None,
+                status_code=400,
+                form_mode=form_mode,
+                form_day=record_day,
+                form_start=record_date_start,
+                form_end=record_date_end,
+                form_purpose=echoed_purpose,
+            )
+        try:
+            chosen_purpose = detect_purpose(echoed_purpose, [name for name, _payload in saved])
+        except ValueError as exc:
+            return _home_response(
+                request,
+                error=str(exc),
+                notice=None,
+                status_code=400,
+                form_mode=form_mode,
+                form_day=record_day,
+                form_start=record_date_start,
+                form_end=record_date_end,
+                form_purpose=echoed_purpose,
+            )
+        try:
+            sub_id = storage.create_submission_from_paths(
+                user=user,
+                kind=kind,
+                note=note,
+                files=saved,
+                record_date_start=record_start,
+                record_date_end=record_end,
+                purpose=chosen_purpose,
+            )
+        except Exception:
+            return _home_response(
+                request,
+                error="儲存失敗，請稍後再試或聯絡管理員。",
+                notice=None,
+                status_code=500,
+                form_mode=form_mode,
+                form_day=record_day,
+                form_start=record_date_start,
+                form_end=record_date_end,
+                form_purpose=echoed_purpose,
+            )
+    finally:
+        shutil.rmtree(stage_dir, ignore_errors=True)
+    return RedirectResponse(f"/submission/{quote(sub_id)}?notice=submitted", status_code=303)
+
+
+class _TooLarge(Exception):
+    """The streamed file passed the per-file cap before it was stored."""
+
+
+async def _stream_to_file(upload: UploadFile, dest: Path, limit: int) -> int:
+    """Copy an upload to disk in small blocks. The whole file is not kept in memory."""
+    written = 0
+    with dest.open("wb") as handle:
+        while True:
+            block = await upload.read(1024 * 1024)
+            if not block:
+                break
+            if written + len(block) > limit:
+                raise _TooLarge
+            handle.write(block)
+            written += len(block)
+    if written:
+        os.chmod(dest, 0o600)
+    return written
+
+
+def _upload_json(message: str, status: int) -> JSONResponse:
+    return JSONResponse({"error": message}, status_code=status)
+
+
+def _csrf_from(request: Request, form_token: str = "") -> str:
+    if isinstance(form_token, str) and form_token:
+        return form_token
+    header = request.headers.get("x-csrf-token", "")
+    return header if isinstance(header, str) else ""
+
+
+async def _read_json(request: Request) -> dict[str, Any] | None:
+    try:
+        body = await request.json()
+    except Exception:
+        return None
+    if not isinstance(body, dict):
+        return None
+    return body
+
+
+@app.post("/upload/start")
+async def upload_start(request: Request) -> Response:
+    user = _current_user(request)
+    if not user:
+        return _upload_json("請先登入。", 401)
+    body = await _read_json(request)
+    if body is None:
+        return _upload_json("請重新整理後再試。", 400)
+    if not _valid_csrf(request, _csrf_from(request, str(body.get("csrf") or ""))):
+        return _upload_json("請重新整理後再試。", 400)
+    posted_purpose = str(body.get("purpose") or "").strip()
+    if posted_purpose not in {"", *PURPOSE_CHOICES}:
+        return _upload_json("請選擇上載用途。", 400)
+    echoed = posted_purpose if posted_purpose in PURPOSE_CHOICES else PURPOSE_AUTO
+    try:
+        record_start, record_end = parse_record_dates(
+            str(body.get("record_mode") or ""),
+            str(body.get("record_day") or ""),
+            str(body.get("record_date_start") or ""),
+            str(body.get("record_date_end") or ""),
+        )
+    except ValueError as exc:
+        return _upload_json(str(exc), 400)
+    raw_files = body.get("files")
+    if not isinstance(raw_files, list) or not raw_files:
+        return _upload_json("請至少選擇一個檔案。", 400)
+    described: list[dict[str, Any]] = []
+    for item in raw_files:
+        if not isinstance(item, dict):
+            return _upload_json("檔案資料不正確。", 400)
+        name = _safe_filename(str(item.get("name") or ""))
         ext = Path(name).suffix.lower()
         if ext not in ALLOWED_EXT:
-            errors.append(f"「{name}」檔案類型不允許。")
-            continue
-        data = await upload.read()
-        if not data:
-            continue
-        if len(data) > MAX_FILE_BYTES:
-            errors.append(f"「{name}」超過單檔 40MB 上限。")
-            continue
-        total += len(data)
-        if total > MAX_TOTAL_BYTES:
-            errors.append("今次上載總容量超過 80MB 上限。")
-            break
-        saved.append((name, data))
-    if errors or not saved:
-        msg = "；".join(errors) if errors else "請至少選擇一個檔案。"
-        return _home_response(
-            request,
-            error=msg,
-            notice=None,
-            status_code=400,
-            form_mode=form_mode,
-            form_day=record_day,
-            form_start=record_date_start,
-            form_end=record_date_end,
-            form_purpose=echoed_purpose,
-        )
+            return _upload_json(f"「{name}」檔案類型不允許。", 400)
+        size = item.get("size")
+        if isinstance(size, bool) or not isinstance(size, int):
+            return _upload_json("檔案資料不正確。", 400)
+        described.append({"name": name, "size": size})
     try:
-        chosen_purpose = detect_purpose(echoed_purpose, [name for name, _payload in saved])
+        chosen_purpose = detect_purpose(echoed, [item["name"] for item in described])
     except ValueError as exc:
-        return _home_response(
-            request,
-            error=str(exc),
-            notice=None,
-            status_code=400,
-            form_mode=form_mode,
-            form_day=record_day,
-            form_start=record_date_start,
-            form_end=record_date_end,
-            form_purpose=echoed_purpose,
-        )
+        return _upload_json(str(exc), 400)
+    note = str(body.get("note") or "").strip()[:2000]
     try:
-        sub_id = storage.create_submission(
-            user=user,
-            kind=kind,
+        status = storage.begin_chunk_upload(
+            user,
             note=note,
-            files=saved,
-            record_date_start=record_start,
-            record_date_end=record_end,
+            kind="",
             purpose=chosen_purpose,
+            record_start=record_start,
+            record_end=record_end,
+            files=described,
+            chunk_bytes=CHUNK_BYTES,
+            max_file_bytes=MAX_FILE_BYTES,
+            max_total_bytes=MAX_TOTAL_BYTES,
+            max_files=MAX_FILES,
+            file_too_big=_FILE_TOO_BIG,
+            total_too_big=_TOTAL_TOO_BIG,
         )
+    except ChunkUploadError as exc:
+        return _upload_json(str(exc), 400)
+    return JSONResponse(status)
+
+
+@app.get("/upload/{upload_id}")
+async def upload_status(request: Request, upload_id: str) -> Response:
+    user = _current_user(request)
+    if not user:
+        return _upload_json("請先登入。", 401)
+    if not _valid_csrf(request, _csrf_from(request)):
+        return _upload_json("請重新整理後再試。", 400)
+    try:
+        return JSONResponse(storage.chunk_status(user, upload_id))
+    except ChunkUploadError as exc:
+        return _upload_json(str(exc), 404)
+
+
+@app.post("/upload/{upload_id}/chunk")
+async def upload_chunk(
+    request: Request,
+    upload_id: str,
+    csrf: str = Form(""),
+    file_index: str = Form(""),
+    index: str = Form(""),
+    chunk: UploadFile = File(default=None),
+) -> Response:
+    user = _current_user(request)
+    if not user:
+        return _upload_json("請先登入。", 401)
+    if not _valid_csrf(request, _csrf_from(request, csrf)):
+        return _upload_json("請重新整理後再試。", 400)
+    raw_length = request.headers.get("content-length", "")
+    if raw_length.isdigit() and int(raw_length) > CHUNK_BYTES + 256 * 1024:
+        return _upload_json("這一段太大，請再試。", 400)
+    if chunk is None:
+        return _upload_json("這一段不完整，請再試。", 400)
+    parsed_file = _small_int(file_index)
+    parsed_index = _small_int(index)
+    if parsed_file is None or parsed_index is None:
+        return _upload_json("這一段不屬於這個檔案。", 400)
+    try:
+        plan = storage.chunk_write_plan(user, upload_id, parsed_file, parsed_index)
+        await _write_chunk(chunk, plan["path"], plan["offset"], plan["expected"])
+        status = storage.mark_chunk(user, upload_id, parsed_file, parsed_index)
+    except ChunkUploadError as exc:
+        return _upload_json(str(exc), 400)
+    except _TooLarge:
+        return _upload_json("這一段太大，請再試。", 400)
+    return JSONResponse(status)
+
+
+@app.post("/upload/{upload_id}/complete")
+async def upload_complete(request: Request, upload_id: str) -> Response:
+    user = _current_user(request)
+    if not user:
+        return _upload_json("請先登入。", 401)
+    body = await _read_json(request)
+    token = _csrf_from(request, str((body or {}).get("csrf") or ""))
+    if not _valid_csrf(request, token):
+        return _upload_json("請重新整理後再試。", 400)
+    try:
+        sub_id = storage.finish_chunk_upload(user, upload_id)
+    except ChunkUploadError as exc:
+        return _upload_json(str(exc), 400)
     except Exception:
-        return _home_response(
-            request,
-            error="儲存失敗，請稍後再試或聯絡管理員。",
-            notice=None,
-            status_code=500,
-            form_mode=form_mode,
-            form_day=record_day,
-            form_start=record_date_start,
-            form_end=record_date_end,
-            form_purpose=echoed_purpose,
-        )
-    return RedirectResponse(f"/submission/{quote(sub_id)}?notice=submitted", status_code=303)
+        return _upload_json("儲存失敗，請稍後再試或聯絡管理員。", 500)
+    return JSONResponse(
+        {"ok": True, "id": sub_id, "redirect": f"/submission/{quote(sub_id)}?notice=submitted"}
+    )
+
+
+def _small_int(value: str) -> int | None:
+    if not isinstance(value, str) or not value.isdigit():
+        return None
+    number = int(value)
+    if number > 1_000_000:
+        return None
+    return number
+
+
+async def _write_chunk(upload: UploadFile, dest: Path, offset: int, expected: int) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if not dest.exists():
+        dest.touch()
+        os.chmod(dest, 0o600)
+    written = 0
+    with dest.open("r+b") as handle:
+        handle.seek(offset)
+        while written < expected:
+            block = await upload.read(min(1024 * 1024, expected - written))
+            if not block:
+                raise ChunkUploadError("這一段不完整，請再試。")
+            if written + len(block) > expected:
+                raise _TooLarge
+            handle.write(block)
+            written += len(block)
+        extra = await upload.read(1)
+        if extra:
+            raise _TooLarge
+    os.chmod(dest, 0o600)
 
 
 @app.get("/submission/{sub_id}", response_class=HTMLResponse)

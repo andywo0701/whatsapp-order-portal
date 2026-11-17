@@ -31,6 +31,16 @@
 
 健康檢查路徑是 `/healthz`。不要把 `.env`、密碼、token、webhook 網址、webhook 金鑰或客人資料放進倉庫。
 
+## 上載大小
+
+單檔上限是 4GB，一次提交的總量也是 4GB。這涵蓋至少一個 500MB 的匯出，也涵蓋大約 3GB 的 WhatsApp 備份壓縮檔。
+
+頁面上的提交不會把整個檔案放在一次請求裡。瀏覽器會按 8MB 一段送出，每一段都要登入和原本的 CSRF。伺服器把每一段直接寫進磁碟，不會把整個檔案讀進記憶體。送完才組成原本的檔案，並沿用同一個收件匣：私人 dataset、`manifest.json`、上載用途和紀錄日期。畫面上會顯示已送出多少。
+
+沒有完成、或超過 24 小時的分段暫存會清掉。較大的檔案在本機組成之後，會在背景繼續上傳到私人 dataset，避免一次請求超過托管平台的時限。較小的檔案仍在回應之前上傳。
+
+直接把一個很大的檔案貼進一次表單 POST 時，超過 4GB 會被拒絕。同事平常使用的頁面會自動分段。
+
 ## 上載用途
 
 上載表單預設是「自動分辨」。同事可以改選三個用途。WhatsApp 紀錄日期（不指定、單日或日期範圍）跟以前一樣，可選。
@@ -195,9 +205,11 @@ Andy、Debbie、Taya、Katherine 都可以確認待確認的顧客、更正姓�
 
 ## 掃描程式如何發布名冊
 
-掃描程式處理 `purpose` 為 `customers` 的提交之後，把整份名冊上傳到同一個私人 dataset 的 `customers/roster.json`。dataset 還沒有 `customers/` 時，網站會顯示空的名冊，其他頁面仍可使用。
+網站的顧客名冊只讀私人 dataset 的 `customers/roster.json`。下載用的是同一個 dataset 的 `customers/roster.xlsx`。只把 `顧客名冊.xlsx` 放在某筆提交的 `inbox/{id}/results/` 不會更新這個列表；頁面會仍然顯示沒有顧客。
 
-可以用 Hugging Face dataset API 上傳，或在已設定 `HF_TOKEN`（或 `HF_WRITE_TOKEN`）和 `INBOX_DATASET` 的環境執行：
+掃描程式每次更新顧客名冊，都要呼叫 `publish_roster`。它會先讀出現有的官方名冊，合併之後，用一次 commit 同時寫上 `customers/roster.json` 和 `customers/roster.xlsx`。上傳失敗時，原來的官方名冊維持不變，不會只換掉其中一個檔。dataset 還沒有 `customers/` 時，網站會顯示空的名冊，其他頁面仍可使用。
+
+在已設定 `HF_TOKEN`（或 `HF_WRITE_TOKEN`）和 `INBOX_DATASET` 的環境執行：
 
 ```python
 from pathlib import Path
@@ -205,6 +217,8 @@ from sync_inbox import publish_roster
 
 publish_roster(Path("roster.json"))
 ```
+
+`publish_roster` 接受掃描程式稍寬鬆的輸入：`status` 可以是 `need_info` 或 `待補資料`，寫進官方名冊時會變成 `pending`（待確認）。沒有 `id` 的顧客會編一個 `c` 開頭的編號。空白電話不會清掉已經知道的號碼。同一個姓名有不同電話時維持待確認。已經刪除的顧客不會被這次發布救回來。
 
 `customers/roster.json` 例子（請只用假資料，不要把真實電話放進倉庫）：
 
@@ -229,7 +243,7 @@ publish_roster(Path("roster.json"))
 
 - `id`：可選，`6` 到 `64` 個英數、`_` 或 `-`。沒有的話，網站會依姓名併到現有顧客，或自己編一個。
 - `phone_source`：`conversation`（對話）、`contact_screenshot`（聯絡人截圖）、`manual`（人手輸入）、或留空（尚缺）。也可以直接寫中文。掃描程式不應把新讀到的號碼標成人手輸入。
-- `status`：`ok`（正常）或 `pending`（待確認）。同一個姓名有多於一個電話時，網站會改成待確認。
+- `status`：`ok`（正常）或 `pending`（待確認）。掃描程式如果寫 `need_info` 或 `待補資料`，`publish_roster` 會存成 `pending`。同一個姓名有多於一個電話時，網站會改成待確認。
 - `submission_ids`：相關的客戶資料提交編號。詳情頁會在找得到檔案時顯示連結。
 - `phone` 和 `name` 必須是字串。空字串表示沒有，不是「尚缺」這兩個字。
 
